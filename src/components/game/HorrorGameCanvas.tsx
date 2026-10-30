@@ -15,15 +15,18 @@ import {
   Flame,
   ArrowLeft,
   ShieldAlert,
+  Radio,
+  Crosshair,
+  Compass,
 } from "lucide-react";
 
 interface HorrorGameCanvasProps {
   mode: "ESCAPE" | "CONTAINMENT";
 }
 
-// Map Dimensions
-const MAP_W = 1600;
-const MAP_H = 1200;
+// Map Dimensions (Spacious underground bunker with 4 sectors)
+const MAP_W = 1800;
+const MAP_H = 1350;
 
 interface Wall {
   x: number;
@@ -34,41 +37,47 @@ interface Wall {
 
 interface Item {
   id: string;
-  type: "FRAGMENT" | "BATTERY" | "TERMINAL" | "LOCKER" | "EXIT";
+  type: "FRAGMENT" | "BATTERY" | "TERMINAL" | "LOCKER" | "EXIT" | "LORE_TERMINAL";
   x: number;
   y: number;
   radius: number;
   label: string;
   collected?: boolean;
   active?: boolean;
+  sector?: string;
+  loreText?: string;
 }
 
 export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   const { finishGame, triggerJumpscare, goToMenu } = useGame();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const lightCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Player state
   const playerRef = useRef({
-    x: 180,
-    y: 180,
+    x: 220,
+    y: 220,
     angle: 0,
-    speed: 3.2,
+    speed: 3.4,
     stamina: 100,
     flashlightOn: true,
     battery: 100,
     inLocker: false,
     currentLockerId: null as string | null,
+    walkFrame: 0,
   });
 
   // Ronald Monster state
   const monsterRef = useRef({
-    x: 1100,
-    y: 850,
+    x: 1450,
+    y: 950,
     angle: 0,
     speed: 2.7,
     state: "PATROL" as "PATROL" | "ALERT" | "CHASE",
     alertTimer: 0,
     waypointIdx: 0,
+    stunnedTimer: 0,
+    animFrame: 0,
   });
 
   // Gameplay state
@@ -82,92 +91,215 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   const [inLockerUi, setInLockerUi] = useState(false);
   const [interactPrompt, setInteractPrompt] = useState<string | null>(null);
   const [exitUnlocked, setExitUnlocked] = useState(false);
+  const [threatNear, setThreatNear] = useState(false);
+  const threatNearRef = useRef(false);
+  const [radioMsg, setRadioMsg] = useState<{ text: string; sender: string; time: number } | null>({
+    text:
+      mode === "ESCAPE"
+        ? "OBJETIVO: Encuentra los 3 fragmentos de la cura en el búnker y alcanza la esclusa."
+        : "PROTOCOLO DE CONTENCIÓN: Sobrevive a Ronald y purga las terminales con pulsos EMP.",
+    sender: "E.V.A. // BIO-RADAR",
+    time: Date.now() + 6000,
+  });
+
+  // EMP visual pulse animation
+  const [empFlash, setEmpFlash] = useState(false);
 
   // Key states
   const keysRef = useRef<{ [key: string]: boolean }>({});
-  const mouseRef = useRef({ x: 0, y: 0 });
+  const mouseRef = useRef({ x: 400, y: 300 });
 
-  // Map elements definition
+  // Map elements definition (Detailed 4-Sector Laboratory)
   const walls: Wall[] = [
     // Outer perimeter
-    { x: 0, y: 0, w: MAP_W, h: 20 },
-    { x: 0, y: MAP_H - 20, w: MAP_W, h: 20 },
-    { x: 0, y: 0, w: 20, h: MAP_H },
-    { x: MAP_W - 20, y: 0, w: 20, h: MAP_H },
+    { x: 0, y: 0, w: MAP_W, h: 25 },
+    { x: 0, y: MAP_H - 25, w: MAP_W, h: 25 },
+    { x: 0, y: 0, w: 25, h: MAP_H },
+    { x: MAP_W - 25, y: 0, w: 25, h: MAP_H },
 
-    // Room 1: Lab Interior Walls
-    { x: 380, y: 20, w: 20, h: 360 },
-    { x: 20, y: 380, w: 280, h: 20 }, // Door gap at x:300-380
+    // Sector 1: West Biolab (Top-Left)
+    { x: 480, y: 25, w: 25, h: 420 },
+    { x: 25, y: 445, w: 340, h: 25 }, // Door gap at x:365-480
 
-    // Room 2: Server Center
-    { x: 380, y: 480, w: 20, h: 320 },
-    { x: 20, y: 800, w: 380, h: 20 },
+    // Sector 2: Server Core (Bottom-Left)
+    { x: 480, y: 565, w: 25, h: 420 },
+    { x: 25, y: 960, w: 455, h: 25 }, // Door gap at x:480
 
-    // Central Pillar / Server Banks
-    { x: 620, y: 280, w: 180, h: 180 },
-    { x: 620, y: 650, w: 180, h: 180 },
+    // Central Pillar & Server Banks
+    { x: 740, y: 340, w: 220, h: 200 },
+    { x: 740, y: 780, w: 220, h: 200 },
 
-    // East Wing: Cryo Storage
-    { x: 1050, y: 20, w: 20, h: 420 },
-    { x: 1050, y: 520, w: 20, h: 380 },
-    { x: 1050, y: 420, w: 280, h: 20 },
-    { x: 1400, y: 420, w: 180, h: 20 },
+    // Sector 3: Cryo Vault & Archives (Bottom-Right)
+    { x: 1200, y: 520, w: 25, h: 440 },
+    { x: 1200, y: 520, w: 320, h: 25 }, // Door gap at x:1520
+    { x: 1200, y: 960, w: 575, h: 25 },
 
-    // South Hall Decontamination Room
-    { x: 620, y: 980, w: 450, h: 20 },
+    // Sector 4: Airlock & Decontamination (Top-Right)
+    { x: 1200, y: 25, w: 25, h: 380 },
+    { x: 1200, y: 405, w: 380, h: 25 }, // Door gap at x:1580
   ];
 
   // Patrol waypoints for Ronald
   const waypoints = [
-    { x: 1150, y: 250 },
-    { x: 850, y: 250 },
-    { x: 500, y: 250 },
-    { x: 500, y: 580 },
-    { x: 850, y: 580 },
-    { x: 850, y: 850 },
-    { x: 1250, y: 850 },
-    { x: 1250, y: 580 },
+    { x: 1350, y: 240 },
+    { x: 1000, y: 240 },
+    { x: 600, y: 240 },
+    { x: 600, y: 680 },
+    { x: 1000, y: 680 },
+    { x: 1000, y: 1080 },
+    { x: 1450, y: 1080 },
+    { x: 1450, y: 680 },
+    { x: 280, y: 680 },
+    { x: 280, y: 240 },
   ];
 
-  // Dynamic game items
-  const [items, setItems] = useState<Item[]>([
-    // Mode Escape Fragments
-    { id: "frag1", type: "FRAGMENT", x: 160, y: 650, radius: 24, label: "FRAGMENTO 01 [BIO-CÓDIGO]" },
-    { id: "frag2", type: "FRAGMENT", x: 1400, y: 220, radius: 24, label: "FRAGMENTO 02 [NEURAL]" },
-    { id: "frag3", type: "FRAGMENT", x: 850, y: 1100, radius: 24, label: "FRAGMENTO 03 [NÚCLEO]" },
+  // Items initialized based on game mode
+  const [items, setItems] = useState<Item[]>(() => {
+    const commonItems: Item[] = [
+      // Flashlight Batteries
+      { id: "bat1", type: "BATTERY", x: 380, y: 140, radius: 22, label: "BATERÍA DE LITIO (+45%)", sector: "SECTOR ALPHA" },
+      { id: "bat2", type: "BATTERY", x: 1080, y: 380, radius: 22, label: "BATERÍA DE LITIO (+45%)", sector: "PASILLO CENTRAL" },
+      { id: "bat3", type: "BATTERY", x: 1620, y: 920, radius: 22, label: "BATERÍA DE LITIO (+45%)", sector: "CRYO VAULT" },
+      { id: "bat4", type: "BATTERY", x: 320, y: 1120, radius: 22, label: "BATERÍA DE LITIO (+45%)", sector: "SERVER CORE" },
 
-    // Flashlight Batteries
-    { id: "bat1", type: "BATTERY", x: 280, y: 120, radius: 20, label: "BATERÍA DE LINTERNA (+40%)" },
-    { id: "bat2", type: "BATTERY", x: 920, y: 350, radius: 20, label: "BATERÍA DE LINTERNA (+40%)" },
-    { id: "bat3", type: "BATTERY", x: 1480, y: 850, radius: 20, label: "BATERÍA DE LINTERNA (+40%)" },
+      // Lockers (Safe Hiding Spots)
+      { id: "lock1", type: "LOCKER", x: 420, y: 80, radius: 30, label: "TAQUILLA METÁLICA (ESCONDERSE)", sector: "SECTOR ALPHA" },
+      { id: "lock2", type: "LOCKER", x: 850, y: 600, radius: 30, label: "ARMARIO DE SEGURIDAD (ESCONDERSE)", sector: "NÚCLEO CENTRAL" },
+      { id: "lock3", type: "LOCKER", x: 1350, y: 600, radius: 30, label: "CÁPSULA DE AISLAMIENTO (ESCONDERSE)", sector: "CRYO VAULT" },
+      { id: "lock4", type: "LOCKER", x: 180, y: 880, radius: 30, label: "TAQUILLA DE MANTENIMIENTO", sector: "SERVER CORE" },
+    ];
 
-    // Lockers (Hiding Spots)
-    { id: "lock1", type: "LOCKER", x: 340, y: 60, radius: 28, label: "TAQUILLA METÁLICA (ESCONDERSE)" },
-    { id: "lock2", type: "LOCKER", x: 680, y: 520, radius: 28, label: "TAQUILLA DE SEGURIDAD (ESCONDERSE)" },
-    { id: "lock3", type: "LOCKER", x: 1200, y: 480, radius: 28, label: "ARMARIO DE CONTENCIÓN (ESCONDERSE)" },
+    if (mode === "ESCAPE") {
+      return [
+        ...commonItems,
+        // The 3 Cure Fragments
+        {
+          id: "frag1",
+          type: "FRAGMENT",
+          x: 180,
+          y: 720,
+          radius: 26,
+          label: "FRAGMENTO 01 [CÓDIGO GENÉTICO]",
+          sector: "SECTOR ALPHA",
+          loreText: "Secuencia ADN alterada por E.V.A. recuperada.",
+        },
+        {
+          id: "frag2",
+          type: "FRAGMENT",
+          x: 1550,
+          y: 240,
+          radius: 26,
+          label: "FRAGMENTO 02 [SUPRESIÓN NEURAL]",
+          sector: "SECTOR BETA",
+          loreText: "Algoritmo de neutralización del virus CooWeb.",
+        },
+        {
+          id: "frag3",
+          type: "FRAGMENT",
+          x: 1050,
+          y: 1200,
+          radius: 26,
+          label: "FRAGMENTO 03 [ANTÍDOTO SINTÉTICO]",
+          sector: "SECTOR GAMMA",
+          loreText: "Fórmula molecular final sintetizada por Ronald.",
+        },
+        // Decontamination Exit Door
+        { id: "exit", type: "EXIT", x: 1680, y: 80, radius: 42, label: "ESCLUSA DE DESCONTAMINACIÓN", sector: "SALIDA" },
+      ];
+    } else {
+      // Containment Mode Terminals (Purge & EMP)
+      return [
+        ...commonItems,
+        {
+          id: "term1",
+          type: "TERMINAL",
+          x: 240,
+          y: 350,
+          radius: 32,
+          label: "TERMINAL DE PURGA ALPHA",
+          sector: "SECTOR ALPHA",
+          active: true,
+        },
+        {
+          id: "term2",
+          type: "TERMINAL",
+          x: 1050,
+          y: 320,
+          radius: 32,
+          label: "TERMINAL DE PURGA BETA",
+          sector: "PASILLO CENTRAL",
+          active: true,
+        },
+        {
+          id: "term3",
+          type: "TERMINAL",
+          x: 1550,
+          y: 820,
+          radius: 32,
+          label: "TERMINAL DE PURGA GAMMA",
+          sector: "CRYO VAULT",
+          active: true,
+        },
+        {
+          id: "term4",
+          type: "TERMINAL",
+          x: 250,
+          y: 1200,
+          radius: 32,
+          label: "TERMINAL DE PURGA DELTA",
+          sector: "SERVER CORE",
+          active: true,
+        },
+      ];
+    }
+  });
 
-    // Escape Exit Door
-    { id: "exit", type: "EXIT", x: 1520, y: 60, radius: 36, label: "ESCLUSA DE DESCONTAMINACIÓN" },
+  // Start sound ambient loop on mount, stop on unmount
+  useEffect(() => {
+    soundFX.startAmbient();
+    return () => {
+      soundFX.stopAmbient();
+      soundFX.stopChaseMusic();
+    };
+  }, []);
 
-    // Containment Mode Terminals
-    { id: "term1", type: "TERMINAL", x: 200, y: 320, radius: 30, label: "TERMINAL DE PURGA SECTOR 1", active: true },
-    { id: "term2", type: "TERMINAL", x: 950, y: 280, radius: 30, label: "TERMINAL DE PURGA SECTOR 2", active: true },
-    { id: "term3", type: "TERMINAL", x: 1350, y: 750, radius: 30, label: "TERMINAL DE PURGA SECTOR 3", active: true },
-  ]);
+  // Handle Window Resize dynamically
+  useEffect(() => {
+    const handleResize = () => {
+      if (canvasRef.current) {
+        canvasRef.current.width = window.innerWidth;
+        canvasRef.current.height = window.innerHeight;
+      }
+      if (lightCanvasRef.current) {
+        lightCanvasRef.current.width = window.innerWidth;
+        lightCanvasRef.current.height = window.innerHeight;
+      }
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   // Handle User Input Events
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       keysRef.current[e.key.toLowerCase()] = true;
 
-      // Flashlight toggle
+      // Flashlight toggle (F)
       if (e.key.toLowerCase() === "f") {
         soundFX.playFlashlightClick();
         playerRef.current.flashlightOn = !playerRef.current.flashlightOn;
         setFlashlightUi(playerRef.current.flashlightOn);
+        setRadioMsg({
+          text: playerRef.current.flashlightOn
+            ? "LINTERNA ENCENDIDA: Visibilidad máxima (Riesgo de detección alto)."
+            : "MODO SIGILO ACTIVO: Linterna apagada (Detección reducida al 25%).",
+          sender: "TRAJE BIOMÉTRICO",
+          time: Date.now() + 3500,
+        });
       }
 
-      // Interaction key
+      // Interaction key (E or Space)
       if (e.key.toLowerCase() === "e" || e.key === " ") {
         handleInteraction();
       }
@@ -205,14 +337,14 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         const next = prev + 1;
         if (mode === "CONTAINMENT") {
           // Increase score per second survived
-          setScore((s) => s + 10);
+          setScore((s) => s + 15);
 
           // Escalate threat level every 30 seconds
           const newThreat = Math.min(5, Math.floor(next / 30) + 1);
           setThreatLevel(newThreat);
 
           // Ronald speeds up with threat level
-          monsterRef.current.speed = 2.8 + newThreat * 0.28;
+          monsterRef.current.speed = 2.7 + newThreat * 0.32;
         }
         return next;
       });
@@ -246,6 +378,11 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       p.currentLockerId = null;
       setInLockerUi(false);
       soundFX.playFootstep();
+      setRadioMsg({
+        text: "HAS SALIDO DE LA TAQUILLA. Mantente alerta.",
+        sender: "BIO-RADAR",
+        time: Date.now() + 3000,
+      });
       return;
     }
 
@@ -254,52 +391,98 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       if (item.collected) continue;
       const dist = Math.hypot(p.x - item.x, p.y - item.y);
 
-      if (dist < item.radius + 30) {
+      if (dist < item.radius + 35) {
+        // Collect Cure Fragment (Escape Mode)
         if (item.type === "FRAGMENT") {
           item.collected = true;
           soundFX.playItemPickup();
           setFragmentsCount((c) => {
             const next = c + 1;
-            if (next === 3) setExitUnlocked(true);
+            if (next === 3) {
+              setExitUnlocked(true);
+              soundFX.playTerminalHack();
+              setRadioMsg({
+                text: "¡TODOS LOS FRAGMENTOS ASEGURADOS! ¡LA ESCLUSA DE ESCAPE ESTÁ DESBLOQUEADA!",
+                sender: "E.V.A. // ALERTA MÁXIMA",
+                time: Date.now() + 8000,
+              });
+            } else {
+              setRadioMsg({
+                text: `FRAGMENTO [${next}/3] ASEGURADO: ${item.loreText}`,
+                sender: "DATOS RECUPERADOS",
+                time: Date.now() + 5000,
+              });
+            }
             return next;
           });
-          if (mode === "CONTAINMENT") setScore((s) => s + 350);
           return;
         }
 
+        // Collect Flashlight Battery
         if (item.type === "BATTERY") {
           item.collected = true;
           soundFX.playItemPickup();
           p.battery = Math.min(100, p.battery + 45);
           setBatteryUi(p.battery);
+          setRadioMsg({
+            text: "BATERÍA DE LITIO CARGADA (+45% ENERGÍA)",
+            sender: "LINTERNA TÁCTICA",
+            time: Date.now() + 3000,
+          });
           return;
         }
 
+        // Hide in Locker
         if (item.type === "LOCKER") {
           p.inLocker = true;
           p.currentLockerId = item.id;
           setInLockerUi(true);
           soundFX.playFootstep();
+          setRadioMsg({
+            text: "OCULTO EN LA TAQUILLA. Ronald pasará de largo si no te vio entrar.",
+            sender: "MODO SIGILO",
+            time: Date.now() + 4000,
+          });
           return;
         }
 
+        // Hack Terminal (Containment Mode)
         if (item.type === "TERMINAL" && mode === "CONTAINMENT") {
+          if (!item.active) return;
           soundFX.playTerminalHack();
-          setScore((s) => s + 250);
+          setScore((s) => s + 500);
           item.active = false;
-          // Reactivate after 20s
+
+          // Trigger EMP Stun on Ronald
+          monsterRef.current.stunnedTimer = 180; // 3 seconds at 60fps
+          setEmpFlash(true);
+          setTimeout(() => setEmpFlash(false), 400);
+
+          setRadioMsg({
+            text: "¡PURGA EXITOSA (+500 PTS)! PULSO EMP GENERADO: Ronald aturdido por 3 segundos.",
+            sender: "SISTEMA DE PURGA",
+            time: Date.now() + 5000,
+          });
+
+          // Reactivate terminal after 22s
           setTimeout(() => {
             item.active = true;
-          }, 20000);
+          }, 22000);
           return;
         }
 
+        // Exit Airlock (Escape Mode)
         if (item.type === "EXIT" && mode === "ESCAPE") {
           if (fragmentsCount >= 3) {
             soundFX.playTerminalHack();
-            finishGame("VICTORY", 5000 - survivalSecs * 10, survivalSecs);
+            finishGame("VICTORY", Math.max(1000, 5000 - survivalSecs * 12), survivalSecs);
           } else {
             soundFX.playHeartbeat(3);
+            setRadioMsg({
+              text: `ACCESO DENEGADO: Faltan ${3 - fragmentsCount} fragmentos del código para desbloquear la esclusa.`,
+              sender: "PUERTA BLINDADA",
+              time: Date.now() + 4000,
+            });
           }
           return;
         }
@@ -314,6 +497,15 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    // Create or resize offscreen lighting canvas
+    if (!lightCanvasRef.current) {
+      lightCanvasRef.current = document.createElement("canvas");
+    }
+    const lightCanvas = lightCanvasRef.current;
+    lightCanvas.width = canvas.width;
+    lightCanvas.height = canvas.height;
+    const lightCtx = lightCanvas.getContext("2d");
+
     let animId: number;
     let stepSoundTimer = 0;
     let heartbeatTimer = 0;
@@ -322,10 +514,13 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       const p = playerRef.current;
       const m = monsterRef.current;
 
+      const viewW = canvas.width;
+      const viewH = canvas.height;
+
       // 1. Player Movement & Stamina Logic
       const keys = keysRef.current;
       const isSprinting = (keys["shift"] || keys["shiftleft"]) && p.stamina > 10;
-      const currentSpeed = isSprinting ? 5.2 : 3.2;
+      const currentSpeed = isSprinting ? 5.2 : 3.4;
 
       let dx = 0;
       let dy = 0;
@@ -351,20 +546,21 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         if (isSprinting && (dx !== 0 || dy !== 0)) {
           p.stamina = Math.max(0, p.stamina - 0.45);
         } else {
-          p.stamina = Math.min(100, p.stamina + 0.25);
+          p.stamina = Math.min(100, p.stamina + 0.3);
         }
         setStaminaUi(Math.floor(p.stamina));
 
         // Drain flashlight battery
         if (p.flashlightOn) {
-          p.battery = Math.max(0, p.battery - 0.02);
+          p.battery = Math.max(0, p.battery - 0.018);
           setBatteryUi(Math.floor(p.battery));
         }
 
-        // Footstep sound cadence
+        // Animate walk cycle
         if (dx !== 0 || dy !== 0) {
+          p.walkFrame += isSprinting ? 0.28 : 0.16;
           stepSoundTimer++;
-          const cadence = isSprinting ? 12 : 22;
+          const cadence = isSprinting ? 12 : 20;
           if (stepSoundTimer >= cadence) {
             soundFX.playFootstep(isSprinting);
             stepSoundTimer = 0;
@@ -372,96 +568,123 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         }
       }
 
-      // 2. Camera calculation
-      const viewW = canvas.width;
-      const viewH = canvas.height;
-      const camX = Math.max(0, Math.min(MAP_W - viewW, p.x - viewW / 2));
-      const camY = Math.max(0, Math.min(MAP_H - viewH, p.y - viewH / 2));
+      // 2. Camera calculation (Centered smoothly, clamping within MAP bounds)
+      const camX =
+        viewW >= MAP_W
+          ? -(viewW - MAP_W) / 2
+          : Math.max(0, Math.min(MAP_W - viewW, p.x - viewW / 2));
+      const camY =
+        viewH >= MAP_H
+          ? -(viewH - MAP_H) / 2
+          : Math.max(0, Math.min(MAP_H - viewH, p.y - viewH / 2));
 
-      // Calculate player flashlight angle from screen center to mouse
+      // Calculate player flashlight angle from screen position to mouse
       const screenPx = p.x - camX;
       const screenPy = p.y - camY;
       p.angle = Math.atan2(mouseRef.current.y - screenPy, mouseRef.current.x - screenPx);
 
       // 3. Ronald AI Perception & Decision
       const distToPlayer = Math.hypot(p.x - m.x, p.y - m.y);
-
-      // Heartbeat audio calculation based on proximity
-      heartbeatTimer++;
-      const heartRate = distToPlayer < 250 ? 25 : distToPlayer < 500 ? 55 : 90;
-      if (heartbeatTimer >= heartRate) {
-        soundFX.playHeartbeat(distToPlayer < 250 ? 3 : 1);
-        heartbeatTimer = 0;
+      const isNear = (distToPlayer < 360 || m.state === "CHASE") && !p.inLocker;
+      if (isNear !== threatNearRef.current) {
+        threatNearRef.current = isNear;
+        setThreatNear(isNear);
       }
 
-      // Detection tests
-      let canSeePlayer = false;
-      if (!p.inLocker) {
-        // Player flashlight pointing near monster
-        const angleToMonster = Math.atan2(m.y - p.y, m.x - p.x);
-        const angleDiff = Math.abs(p.angle - angleToMonster);
-        const inFlashlightCone = p.flashlightOn && distToPlayer < 320 && (angleDiff < 0.5 || angleDiff > Math.PI * 2 - 0.5);
-
-        // Monster facing player
-        const monsterFacingAngle = Math.atan2(p.y - m.y, p.x - m.x);
-        const monsterDiff = Math.abs(m.angle - monsterFacingAngle);
-        const inMonsterField = distToPlayer < 180 && (monsterDiff < 1.1 || monsterDiff > Math.PI * 2 - 1.1);
-
-        // Sound detection (sprinting creates noise)
-        const heardSprinting = isSprinting && (dx !== 0 || dy !== 0) && distToPlayer < 240;
-
-        if (inFlashlightCone || inMonsterField || heardSprinting) {
-          canSeePlayer = true;
-        }
-      }
-
-      if (canSeePlayer) {
-        if (m.state !== "CHASE") {
-          soundFX.playMonsterGrowl();
-          soundFX.startChaseMusic();
-        }
-        m.state = "CHASE";
-        m.alertTimer = 180; // Chase persistence frames
-      } else if (m.state === "CHASE") {
-        m.alertTimer--;
-        if (m.alertTimer <= 0) {
-          m.state = "PATROL";
-          soundFX.stopChaseMusic();
-        }
-      }
-
-      // Ronald Movement Execution
-      let targetX = 0;
-      let targetY = 0;
-
-      if (m.state === "CHASE") {
-        targetX = p.x;
-        targetY = p.y;
+      // Handle Ronald Stun from EMP
+      if (m.stunnedTimer > 0) {
+        m.stunnedTimer--;
       } else {
-        const wp = waypoints[m.waypointIdx];
-        targetX = wp.x;
-        targetY = wp.y;
-        if (Math.hypot(m.x - wp.x, m.y - wp.y) < 25) {
-          m.waypointIdx = (m.waypointIdx + 1) % waypoints.length;
+        // Heartbeat audio calculation based on proximity
+        heartbeatTimer++;
+        const heartRate = distToPlayer < 280 ? 22 : distToPlayer < 550 ? 50 : 85;
+        if (heartbeatTimer >= heartRate) {
+          soundFX.playHeartbeat(distToPlayer < 280 ? 3 : 1);
+          heartbeatTimer = 0;
         }
-      }
 
-      const mAngle = Math.atan2(targetY - m.y, targetX - m.x);
-      m.angle = mAngle;
-      const mSpeed = m.state === "CHASE" ? m.speed * 1.3 : m.speed;
+        // Detection tests
+        let canSeePlayer = false;
+        if (!p.inLocker) {
+          // Player flashlight pointing near monster
+          const angleToMonster = Math.atan2(m.y - p.y, m.x - p.x);
+          const angleDiff = Math.abs(p.angle - angleToMonster);
+          const inFlashlightCone =
+            p.flashlightOn &&
+            p.battery > 0 &&
+            distToPlayer < 360 &&
+            (angleDiff < 0.55 || angleDiff > Math.PI * 2 - 0.55);
 
-      const mNextX = m.x + Math.cos(mAngle) * mSpeed;
-      const mNextY = m.y + Math.sin(mAngle) * mSpeed;
+          // Monster facing player directly
+          const monsterFacingAngle = Math.atan2(p.y - m.y, p.x - m.x);
+          const monsterDiff = Math.abs(m.angle - monsterFacingAngle);
+          const inMonsterField =
+            distToPlayer < 220 && (monsterDiff < 1.15 || monsterDiff > Math.PI * 2 - 1.15);
 
-      if (!checkWallCollision(mNextX, m.y, 22)) m.x = mNextX;
-      if (!checkWallCollision(m.x, mNextY, 22)) m.y = mNextY;
+          // Sound detection (sprinting creates noise)
+          const heardSprinting = isSprinting && (dx !== 0 || dy !== 0) && distToPlayer < 320;
 
-      // Check Jumpscare Collision!
-      if (!p.inLocker && distToPlayer < 36) {
-        triggerJumpscare(() => {
-          finishGame("DEFEAT", score, survivalSecs);
-        });
-        return; // End loop on jumpscare
+          if (inFlashlightCone || inMonsterField || heardSprinting) {
+            canSeePlayer = true;
+          }
+        }
+
+        if (canSeePlayer) {
+          if (m.state !== "CHASE") {
+            soundFX.playMonsterGrowl();
+            soundFX.startChaseMusic();
+            setRadioMsg({
+              text: "¡PELIGRO! ¡RONALD HA DETECTADO TU PRESENCIA Y TE ESTÁ PERSIGUIENDO!",
+              sender: "ALERTA BIOMÉTRICA",
+              time: Date.now() + 5000,
+            });
+          }
+          m.state = "CHASE";
+          m.alertTimer = 180; // Persistence frames
+        } else if (m.state === "CHASE") {
+          m.alertTimer--;
+          if (m.alertTimer <= 0) {
+            m.state = "PATROL";
+            soundFX.stopChaseMusic();
+          }
+        }
+
+        // Ronald Movement Execution
+        let targetX = 0;
+        let targetY = 0;
+
+        if (m.state === "CHASE") {
+          targetX = p.x;
+          targetY = p.y;
+        } else {
+          const wp = waypoints[m.waypointIdx];
+          targetX = wp.x;
+          targetY = wp.y;
+          if (Math.hypot(m.x - wp.x, m.y - wp.y) < 35) {
+            m.waypointIdx = (m.waypointIdx + 1) % waypoints.length;
+          }
+        }
+
+        const mAngle = Math.atan2(targetY - m.y, targetX - m.x);
+        m.angle = mAngle;
+        const mSpeed = m.state === "CHASE" ? m.speed * 1.35 : m.speed;
+
+        const mNextX = m.x + Math.cos(mAngle) * mSpeed;
+        const mNextY = m.y + Math.sin(mAngle) * mSpeed;
+
+        if (!checkWallCollision(mNextX, m.y, 24)) m.x = mNextX;
+        if (!checkWallCollision(m.x, mNextY, 24)) m.y = mNextY;
+
+        m.animFrame += m.state === "CHASE" ? 0.25 : 0.12;
+
+        // Check Jumpscare Collision!
+        if (!p.inLocker && distToPlayer < 42) {
+          soundFX.stopChaseMusic();
+          triggerJumpscare(() => {
+            finishGame("DEFEAT", score, survivalSecs);
+          });
+          return; // End loop on jumpscare
+        }
       }
 
       // Check nearby interactable for HUD prompt
@@ -471,192 +694,392 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       } else {
         for (const item of items) {
           if (item.collected) continue;
-          if (Math.hypot(p.x - item.x, p.y - item.y) < item.radius + 30) {
-            promptText = `[E] ${item.label}`;
+          if (Math.hypot(p.x - item.x, p.y - item.y) < item.radius + 35) {
+            if (item.type === "TERMINAL" && !item.active) {
+              promptText = "TERMINAL REINICIÁNDOSE... (ESPERA)";
+            } else {
+              promptText = `[E] ${item.label}`;
+            }
             break;
           }
         }
       }
       setInteractPrompt(promptText);
 
-      // ================= RENDERING =================
-      // Clear
+      // ==========================================
+      // RENDERING STAGE 1: WORLD & ENTITIES TO MAIN CTX
+      // ==========================================
       ctx.fillStyle = "#09080A";
       ctx.fillRect(0, 0, viewW, viewH);
 
       ctx.save();
       ctx.translate(-camX, -camY);
 
-      // Floor tiles
-      ctx.strokeStyle = "#16101E";
-      ctx.lineWidth = 1;
-      const tileSize = 60;
+      // 1.1 Lab Floor (Dark metallic tiles with subtle panel grids)
+      const tileSize = 80;
       for (let x = 0; x < MAP_W; x += tileSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, MAP_H);
-        ctx.stroke();
-      }
-      for (let y = 0; y < MAP_H; y += tileSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(MAP_W, y);
-        ctx.stroke();
+        for (let y = 0; y < MAP_H; y += tileSize) {
+          // Checkered subtle tint
+          const isAlt = ((x / tileSize) + (y / tileSize)) % 2 === 0;
+          ctx.fillStyle = isAlt ? "#0E0C12" : "#120F18";
+          ctx.fillRect(x, y, tileSize, tileSize);
+
+          ctx.strokeStyle = "rgba(83, 5, 112, 0.15)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x, y, tileSize, tileSize);
+        }
       }
 
-      // Walls
-      ctx.fillStyle = "#120E17";
-      ctx.strokeStyle = "#530570";
-      ctx.lineWidth = 2;
+      // 1.2 Sector Floor Decals & Hazard Stripes
+      ctx.font = "bold 22px monospace";
+      ctx.fillStyle = "rgba(139, 31, 212, 0.25)";
+      ctx.fillText("SECTOR ALPHA // LAB. GENÉTICO", 60, 80);
+      ctx.fillText("SECTOR BETA // ARCHIVO CENTRAL", 1300, 80);
+      ctx.fillText("SECTOR GAMMA // CRYO STORAGE", 1300, 1020);
+      ctx.fillText("SECTOR DELTA // SERVER NUCLEUS", 60, 1020);
+
+      // Warning hazard stripes around doorways
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.35)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 10]);
+      ctx.strokeRect(365, 435, 115, 20);
+      ctx.strokeRect(1200, 395, 20, 110);
+      ctx.setLineDash([]);
+
+      // Mutant bio-fluid puddles / blood stains on the ground
+      ctx.fillStyle = "rgba(120, 10, 30, 0.35)";
+      ctx.beginPath();
+      ctx.ellipse(320, 300, 35, 20, 0.4, 0, Math.PI * 2);
+      ctx.ellipse(980, 720, 45, 28, -0.3, 0, Math.PI * 2);
+      ctx.ellipse(1400, 880, 50, 32, 0.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 1.3 Solid Walls with High-Tech Bevels
       for (const wall of walls) {
+        // Base Wall
+        ctx.fillStyle = "#181220";
         ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+
+        // Neon conduit strip along the wall
+        ctx.strokeStyle = "#530570";
+        ctx.lineWidth = 2.5;
         ctx.strokeRect(wall.x, wall.y, wall.w, wall.h);
+
+        // Inner bevel highlight
+        ctx.fillStyle = "rgba(139, 31, 212, 0.25)";
+        ctx.fillRect(wall.x + 2, wall.y + 2, Math.max(1, wall.w - 4), 3);
       }
 
-      // Draw Items & Interactive Objects
+      // 1.4 Interactive Objects (Fragments, Batteries, Terminals, Lockers, Exit)
       for (const item of items) {
         if (item.collected) continue;
 
         if (item.type === "FRAGMENT") {
+          // Holographic DNA / Cure Data Core
+          const floatOffset = Math.sin(Date.now() / 250) * 4;
           ctx.fillStyle = "#00FFC2";
           ctx.beginPath();
-          ctx.arc(item.x, item.y, 8, 0, Math.PI * 2);
+          ctx.arc(item.x, item.y + floatOffset, 10, 0, Math.PI * 2);
           ctx.fill();
-          // Glow pulse
-          ctx.strokeStyle = "rgba(0, 255, 194, 0.4)";
-          ctx.lineWidth = 4;
+
+          // Pulsing cyan aura ring
+          ctx.strokeStyle = "rgba(0, 255, 194, 0.6)";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(item.x, item.y + floatOffset, 18 + Math.sin(Date.now() / 200) * 4, 0, Math.PI * 2);
           ctx.stroke();
+
+          // Label
+          ctx.font = "bold 9px monospace";
+          ctx.fillStyle = "#00FFC2";
+          ctx.textAlign = "center";
+          ctx.fillText("CURE CODE", item.x, item.y + floatOffset - 16);
         } else if (item.type === "BATTERY") {
+          // Battery Pack (High visibility amber canister)
           ctx.fillStyle = "#F59E0B";
-          ctx.fillRect(item.x - 6, item.y - 10, 12, 20);
+          ctx.fillRect(item.x - 7, item.y - 12, 14, 24);
+          ctx.fillStyle = "#FDE68A";
+          ctx.fillRect(item.x - 4, item.y - 15, 8, 4);
+
+          ctx.font = "bold 8px monospace";
+          ctx.fillStyle = "#F59E0B";
+          ctx.textAlign = "center";
+          ctx.fillText("PWR", item.x, item.y - 18);
         } else if (item.type === "LOCKER") {
-          ctx.fillStyle = "#2D2438";
+          // Metal Locker / Hiding place
+          ctx.fillStyle = "#261D32";
           ctx.strokeStyle = "#8B1FD4";
-          ctx.lineWidth = 1.5;
-          ctx.fillRect(item.x - 14, item.y - 14, 28, 28);
-          ctx.strokeRect(item.x - 14, item.y - 14, 28, 28);
-        } else if (item.type === "EXIT") {
-          ctx.fillStyle = exitUnlocked ? "#00FFC2" : "#FF1E42";
-          ctx.fillRect(item.x - 20, item.y - 20, 40, 40);
+          ctx.lineWidth = 2;
+          ctx.fillRect(item.x - 16, item.y - 16, 32, 32);
+          ctx.strokeRect(item.x - 16, item.y - 16, 32, 32);
+
+          // Ventilation slots
+          ctx.fillStyle = "#120E17";
+          ctx.fillRect(item.x - 10, item.y - 8, 20, 3);
+          ctx.fillRect(item.x - 10, item.y - 1, 20, 3);
+          ctx.fillRect(item.x - 10, item.y + 6, 20, 3);
+
+          // Door Status LED (Green = Available, Red = Occupied)
+          ctx.fillStyle = p.inLocker && p.currentLockerId === item.id ? "#FF1E42" : "#00FFC2";
+          ctx.beginPath();
+          ctx.arc(item.x + 10, item.y - 10, 2.5, 0, Math.PI * 2);
+          ctx.fill();
         } else if (item.type === "TERMINAL") {
-          ctx.fillStyle = item.active ? "#8B1FD4" : "#4A3B59";
-          ctx.fillRect(item.x - 12, item.y - 12, 24, 24);
+          // Supercomputer Terminal
+          ctx.fillStyle = item.active ? "#361D4C" : "#1A1522";
+          ctx.strokeStyle = item.active ? "#8B1FD4" : "#4A3B59";
+          ctx.lineWidth = 2;
+          ctx.fillRect(item.x - 16, item.y - 16, 32, 32);
+          ctx.strokeRect(item.x - 16, item.y - 16, 32, 32);
+
+          // CRT Screen with scrolling code
+          ctx.fillStyle = item.active ? "#00FFC2" : "#555";
+          ctx.fillRect(item.x - 10, item.y - 10, 20, 14);
+
+          // Terminal Status Label
+          ctx.font = "bold 8px monospace";
+          ctx.fillStyle = item.active ? "#00FFC2" : "#888";
+          ctx.textAlign = "center";
+          ctx.fillText(item.active ? "EMP READY" : "REBOOT", item.x, item.y - 20);
+        } else if (item.type === "EXIT") {
+          // Massive Decontamination Airlock
+          ctx.fillStyle = exitUnlocked ? "rgba(0, 255, 194, 0.2)" : "rgba(255, 30, 66, 0.2)";
+          ctx.strokeStyle = exitUnlocked ? "#00FFC2" : "#FF1E42";
+          ctx.lineWidth = 3;
+          ctx.fillRect(item.x - 30, item.y - 30, 60, 60);
+          ctx.strokeRect(item.x - 30, item.y - 30, 60, 60);
+
+          // Heavy diagonal hazard pattern
+          ctx.beginPath();
+          ctx.moveTo(item.x - 30, item.y - 30);
+          ctx.lineTo(item.x + 30, item.y + 30);
+          ctx.moveTo(item.x + 30, item.y - 30);
+          ctx.lineTo(item.x - 30, item.y + 30);
+          ctx.stroke();
+
+          ctx.font = "bold 11px monospace";
+          ctx.fillStyle = exitUnlocked ? "#00FFC2" : "#FF1E42";
+          ctx.textAlign = "center";
+          ctx.fillText(exitUnlocked ? "ESCLUSA ABIERTA" : "ESCLUSA BLOQUEADA", item.x, item.y + 44);
         }
       }
 
-      // Draw Player Token (unless in locker)
+      // 1.5 Survivor Player Character
       if (!p.inLocker) {
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(p.angle);
 
-        // Survivor body
-        ctx.fillStyle = "#F5F3F2";
+        // Survivor tactical suit
+        ctx.fillStyle = "#1E293B"; // Tactical dark blue vest
         ctx.beginPath();
-        ctx.arc(0, 0, 14, 0, Math.PI * 2);
+        ctx.arc(0, 0, 15, 0, Math.PI * 2);
         ctx.fill();
 
-        // Flashlight holder arm
-        ctx.fillStyle = "#530570";
-        ctx.fillRect(8, -4, 12, 8);
+        // Shoulder pads
+        ctx.fillStyle = "#334155";
+        ctx.fillRect(-6, -14, 12, 6);
+        ctx.fillRect(-6, 8, 12, 6);
+
+        // Head with tactical helmet
+        ctx.fillStyle = "#F5F3F2";
+        ctx.beginPath();
+        ctx.arc(2, 0, 8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Directional flashlight emitter in hand
+        ctx.fillStyle = "#00FFC2";
+        ctx.fillRect(10, 4, 10, 5);
 
         ctx.restore();
       }
 
-      // Draw Ronald Monster Token
+      // 1.6 Ronald Biomechanical Monster
       ctx.save();
       ctx.translate(m.x, m.y);
       ctx.rotate(m.angle);
 
-      // Monster Body (deep bio-black with violet outline)
+      // Biomechanical torso (deep bio-black with jagged edges)
       ctx.fillStyle = "#09080A";
       ctx.strokeStyle = m.state === "CHASE" ? "#FF1E42" : "#530570";
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(0, 0, 18, 0, Math.PI * 2);
+      ctx.arc(0, 0, 20, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      // Sharp biomechanical claws
+      // Cybernetic spine & cables along back
       ctx.strokeStyle = "#8B1FD4";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(-16, 0);
+      ctx.lineTo(-4, 0);
+      ctx.moveTo(-14, -6);
+      ctx.lineTo(-6, -6);
+      ctx.moveTo(-14, 6);
+      ctx.lineTo(-6, 6);
+      ctx.stroke();
+
+      // Sharp biomechanical claws (animated twitching)
+      const clawReach = Math.sin(m.animFrame) * 4;
+      ctx.strokeStyle = m.state === "CHASE" ? "#FF1E42" : "#A855F7";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(14, -12);
-      ctx.lineTo(26, -18);
-      ctx.moveTo(16, 0);
-      ctx.lineTo(28, 0);
-      ctx.moveTo(14, 12);
-      ctx.lineTo(26, 18);
+      ctx.moveTo(14, -14);
+      ctx.lineTo(26 + clawReach, -20);
+      ctx.moveTo(18, 0);
+      ctx.lineTo(30 + clawReach, 0);
+      ctx.moveTo(14, 14);
+      ctx.lineTo(26 + clawReach, 20);
       ctx.stroke();
 
-      // Glowing violet cyber-eyes
+      // Glowing cyber-eyes
       ctx.fillStyle = m.state === "CHASE" ? "#FF1E42" : "#A855F7";
       ctx.beginPath();
-      ctx.arc(10, -5, 3.5, 0, Math.PI * 2);
-      ctx.arc(10, 5, 3.5, 0, Math.PI * 2);
+      ctx.arc(12, -6, 3.5, 0, Math.PI * 2);
+      ctx.arc(12, 6, 3.5, 0, Math.PI * 2);
       ctx.fill();
+
+      // Stunned electrical sparks if hit by EMP
+      if (m.stunnedTimer > 0) {
+        ctx.strokeStyle = "#00FFC2";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-20, -15);
+        ctx.lineTo(-5, 0);
+        ctx.lineTo(20, -10);
+        ctx.stroke();
+      }
 
       ctx.restore();
 
-      // ================= VOLUMETRIC LIGHTING / DARKNESS LAYER =================
-      ctx.restore(); // back to screen space
+      ctx.restore(); // Exit world coordinate translation
 
-      // Create darkness mask
-      ctx.save();
-      ctx.fillStyle = "rgba(9, 8, 10, 0.98)";
-      ctx.fillRect(0, 0, viewW, viewH);
+      // ==========================================
+      // RENDERING STAGE 2: VOLUMETRIC LIGHTING & FOG OF WAR
+      // (Using persistent offscreen canvas to avoid destroying scene)
+      // ==========================================
+      if (lightCtx) {
+        // Reset offscreen composite mode
+        lightCtx.globalCompositeOperation = "source-over";
 
-      // Cut out light using destination-out
-      ctx.globalCompositeOperation = "destination-out";
+        // Ambient Bunker Darkness (0.86 allows faint perception of walls & corridors)
+        lightCtx.fillStyle = "rgba(9, 8, 10, 0.86)";
+        lightCtx.fillRect(0, 0, viewW, viewH);
 
-      // 1. Ambient glow around player
-      const pScreenX = p.x - camX;
-      const pScreenY = p.y - camY;
+        // Switch to punch out holes in the darkness
+        lightCtx.globalCompositeOperation = "destination-out";
 
-      if (!p.inLocker) {
-        const ambRadius = p.flashlightOn ? 45 : 20;
-        const ambGrad = ctx.createRadialGradient(pScreenX, pScreenY, 5, pScreenX, pScreenY, ambRadius);
-        ambGrad.addColorStop(0, "rgba(0, 0, 0, 1)");
-        ambGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
-        ctx.fillStyle = ambGrad;
-        ctx.beginPath();
-        ctx.arc(pScreenX, pScreenY, ambRadius, 0, Math.PI * 2);
-        ctx.fill();
+        const pScreenX = p.x - camX;
+        const pScreenY = p.y - camY;
 
-        // 2. Flashlight beam cone
-        if (p.flashlightOn && p.battery > 0) {
-          // Flicker if battery < 15%
-          const flicker = p.battery < 15 && Math.random() > 0.4;
+        // 2.1 Player Ambient Circle (Immediate surroundings clearly visible)
+        if (!p.inLocker) {
+          const ambRadius = p.flashlightOn ? 115 : 45;
+          const ambGrad = lightCtx.createRadialGradient(
+            pScreenX,
+            pScreenY,
+            15,
+            pScreenX,
+            pScreenY,
+            ambRadius
+          );
+          ambGrad.addColorStop(0, "rgba(0, 0, 0, 1)");
+          ambGrad.addColorStop(0.75, "rgba(0, 0, 0, 0.85)");
+          ambGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
 
-          if (!flicker) {
-            const beamDist = 270;
-            const beamAngle = 0.48; // ~55 degrees
+          lightCtx.fillStyle = ambGrad;
+          lightCtx.beginPath();
+          lightCtx.arc(pScreenX, pScreenY, ambRadius, 0, Math.PI * 2);
+          lightCtx.fill();
 
-            ctx.beginPath();
-            ctx.moveTo(pScreenX, pScreenY);
-            ctx.arc(pScreenX, pScreenY, beamDist, p.angle - beamAngle, p.angle + beamAngle);
-            ctx.closePath();
+          // 2.2 Volumetric Flashlight Beam Cone
+          if (p.flashlightOn && p.battery > 0) {
+            const flicker = p.battery < 15 && Math.random() > 0.45;
 
-            const beamGrad = ctx.createRadialGradient(pScreenX, pScreenY, 15, pScreenX, pScreenY, beamDist);
-            beamGrad.addColorStop(0, "rgba(0, 0, 0, 1)");
-            beamGrad.addColorStop(0.7, "rgba(0, 0, 0, 0.85)");
-            beamGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
-            ctx.fillStyle = beamGrad;
-            ctx.fill();
+            if (!flicker) {
+              const beamDist = 420;
+              const beamAngle = 0.58; // ~66 degrees cone
+
+              lightCtx.beginPath();
+              lightCtx.moveTo(pScreenX, pScreenY);
+              lightCtx.arc(pScreenX, pScreenY, beamDist, p.angle - beamAngle, p.angle + beamAngle);
+              lightCtx.closePath();
+
+              const beamGrad = lightCtx.createRadialGradient(
+                pScreenX,
+                pScreenY,
+                25,
+                pScreenX,
+                pScreenY,
+                beamDist
+              );
+              beamGrad.addColorStop(0, "rgba(0, 0, 0, 1)");
+              beamGrad.addColorStop(0.7, "rgba(0, 0, 0, 0.9)");
+              beamGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+              lightCtx.fillStyle = beamGrad;
+              lightCtx.fill();
+            }
           }
         }
+
+        // 2.3 Objective Beacon Cutouts (Fragments, Terminals, and Exit glow through the dark)
+        for (const item of items) {
+          if (item.collected) continue;
+          const itemScreenX = item.x - camX;
+          const itemScreenY = item.y - camY;
+
+          // Only cut out if reasonably near the view screen
+          if (
+            itemScreenX >= -100 &&
+            itemScreenX <= viewW + 100 &&
+            itemScreenY >= -100 &&
+            itemScreenY <= viewH + 100
+          ) {
+            let glowRad = 50;
+            if (item.type === "FRAGMENT") glowRad = 65;
+            if (item.type === "EXIT") glowRad = 90;
+
+            const objGrad = lightCtx.createRadialGradient(
+              itemScreenX,
+              itemScreenY,
+              5,
+              itemScreenX,
+              itemScreenY,
+              glowRad
+            );
+            objGrad.addColorStop(0, "rgba(0, 0, 0, 0.85)");
+            objGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+            lightCtx.fillStyle = objGrad;
+            lightCtx.beginPath();
+            lightCtx.arc(itemScreenX, itemScreenY, glowRad, 0, Math.PI * 2);
+            lightCtx.fill();
+          }
+        }
+
+        // Draw the darkness layer over the world!
+        ctx.drawImage(lightCanvas, 0, 0);
       }
 
-      ctx.restore(); // restore composite mode
-
-      // Ronald's glowing cybernetic eyes pierce through the pitch blackness!
+      // ==========================================
+      // RENDERING STAGE 3: VOLUMETRIC TINT & PIERCING CYBER-EYES
+      // ==========================================
       const mScreenX = m.x - camX;
       const mScreenY = m.y - camY;
+
+      // Ronald's glowing cybernetic eyes pierce through the dark shadows!
       ctx.fillStyle = m.state === "CHASE" ? "#FF1E42" : "#A855F7";
+      ctx.shadowColor = m.state === "CHASE" ? "#FF1E42" : "#A855F7";
+      ctx.shadowBlur = 15;
       ctx.beginPath();
-      ctx.arc(mScreenX - 4, mScreenY, 2.5, 0, Math.PI * 2);
-      ctx.arc(mScreenX + 4, mScreenY, 2.5, 0, Math.PI * 2);
+      ctx.arc(mScreenX - 5, mScreenY, 3, 0, Math.PI * 2);
+      ctx.arc(mScreenX + 5, mScreenY, 3, 0, Math.PI * 2);
       ctx.fill();
+      ctx.shadowBlur = 0; // Reset shadow
+
+      // Tactical Mini-Radar HUD in the corner
+      renderMiniRadar(ctx, viewW, viewH, p, m, items);
 
       animId = requestAnimationFrame(gameLoop);
     };
@@ -666,8 +1089,108 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     return () => cancelAnimationFrame(animId);
   }, [mode, exitUnlocked, fragmentsCount, items, score, survivalSecs, triggerJumpscare, finishGame]);
 
+  // Holographic Mini-Radar Drawer
+  const renderMiniRadar = (
+    ctx: CanvasRenderingContext2D,
+    viewW: number,
+    viewH: number,
+    p: { x: number; y: number; angle: number },
+    m: { x: number; y: number; state: string },
+    currentItems: Item[]
+  ) => {
+    const radarW = 150;
+    const radarH = 112;
+    const radarX = viewW - radarW - 20;
+    const radarY = viewH - radarH - 65;
+
+    // Background Panel
+    ctx.save();
+    ctx.fillStyle = "rgba(9, 8, 10, 0.85)";
+    ctx.strokeStyle = "rgba(83, 5, 112, 0.7)";
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(radarX, radarY, radarW, radarH);
+    ctx.strokeRect(radarX, radarY, radarW, radarH);
+
+    // Radar scanline grid
+    ctx.strokeStyle = "rgba(139, 31, 212, 0.15)";
+    ctx.beginPath();
+    ctx.moveTo(radarX + radarW / 2, radarY);
+    ctx.lineTo(radarX + radarW / 2, radarY + radarH);
+    ctx.moveTo(radarX, radarY + radarH / 2);
+    ctx.lineTo(radarX + radarW, radarY + radarH / 2);
+    ctx.stroke();
+
+    const scaleX = radarW / MAP_W;
+    const scaleY = radarH / MAP_H;
+
+    // Draw Items on Radar
+    for (const item of currentItems) {
+      if (item.collected) continue;
+      const ix = radarX + item.x * scaleX;
+      const iy = radarY + item.y * scaleY;
+
+      if (item.type === "FRAGMENT") {
+        ctx.fillStyle = "#00FFC2";
+        ctx.beginPath();
+        ctx.arc(ix, iy, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (item.type === "EXIT") {
+        ctx.fillStyle = exitUnlocked ? "#00FFC2" : "#FF1E42";
+        ctx.fillRect(ix - 2, iy - 2, 5, 5);
+      } else if (item.type === "TERMINAL" && item.active) {
+        ctx.fillStyle = "#8B1FD4";
+        ctx.beginPath();
+        ctx.arc(ix, iy, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Draw Ronald Monster on Radar (only if within hearing range)
+    const distToPlayer = Math.hypot(p.x - m.x, p.y - m.y);
+    if (distToPlayer < 500 || m.state === "CHASE") {
+      const mx = radarX + m.x * scaleX;
+      const my = radarY + m.y * scaleY;
+      ctx.fillStyle = m.state === "CHASE" ? "#FF1E42" : "#A855F7";
+      ctx.beginPath();
+      ctx.arc(mx, my, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Draw Player dot & direction on radar
+    const px = radarX + p.x * scaleX;
+    const py = radarY + p.y * scaleY;
+    ctx.fillStyle = "#00FFC2";
+    ctx.beginPath();
+    ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Player cone
+    ctx.strokeStyle = "rgba(0, 255, 194, 0.4)";
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + Math.cos(p.angle) * 10, py + Math.sin(p.angle) * 10);
+    ctx.stroke();
+
+    // Radar Header label
+    ctx.font = "bold 8px monospace";
+    ctx.fillStyle = "#8B1FD4";
+    ctx.fillText("BIO-RADAR [E.V.A.]", radarX + 6, radarY + 12);
+
+    ctx.restore();
+  };
+
   return (
     <div className="relative w-full h-screen bg-[#09080A] overflow-hidden select-none font-mono">
+      {/* EMP Shockwave Screen Flash */}
+      {empFlash && (
+        <div className="fixed inset-0 z-30 bg-[#8B1FD4]/40 mix-blend-screen pointer-events-none animate-pulse" />
+      )}
+
+      {/* Red Terror Heartbeat Border when Ronald is near */}
+      {threatNear && (
+        <div className="fixed inset-0 z-20 pointer-events-none border-4 border-[#FF1E42]/50 shadow-[inset_0_0_90px_rgba(255,30,66,0.45)] animate-pulse" />
+      )}
+
       {/* 2D Canvas Viewport */}
       <canvas
         ref={canvasRef}
@@ -679,8 +1202,9 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       {/* Screen edge CRT vignette */}
       <div className="absolute inset-0 crt-vignette pointer-events-none opacity-80" />
 
-      {/* Top HUD Bar */}
+      {/* TOP HUD BAR */}
       <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none z-20">
+        {/* Top Left: Logo, Menu & Timer */}
         <div className="flex items-center gap-3">
           <button
             onClick={goToMenu}
@@ -701,7 +1225,8 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
             <span className="text-neutral-500">|</span>
             <span className="text-[#00FFC2] flex items-center gap-1">
               <Activity className="w-3.5 h-3.5 animate-pulse" />
-              {String(Math.floor(survivalSecs / 60)).padStart(2, "0")}:{String(survivalSecs % 60).padStart(2, "0")}
+              {String(Math.floor(survivalSecs / 60)).padStart(2, "0")}:
+              {String(survivalSecs % 60).padStart(2, "0")}
             </span>
           </div>
         </div>
@@ -760,6 +1285,21 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         </div>
       </div>
 
+      {/* Tactical Radio Transmission Toast (Lore & Guidance) */}
+      {radioMsg && Date.now() < radioMsg.time && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-none w-[90%] max-w-xl">
+          <div className="px-4 py-2 bg-black/90 border-l-4 border-l-[#8B1FD4] border border-[#530570]/70 rounded shadow-[0_0_25px_rgba(83,5,112,0.5)] flex items-center gap-3">
+            <Radio className="w-4 h-4 text-[#00FFC2] shrink-0 animate-pulse" />
+            <div className="text-left">
+              <div className="text-[9px] font-bold text-[#8B1FD4] uppercase tracking-wider">
+                {radioMsg.sender}
+              </div>
+              <div className="text-xs text-[#F5F3F2] font-semibold">{radioMsg.text}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Interaction Prompt Box */}
       {interactPrompt && (
         <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
@@ -784,9 +1324,9 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
           </div>
         </div>
 
-        {/* Mobile / Helper controls hint */}
-        <div className="hidden sm:block text-[11px] text-neutral-500 bg-black/60 px-3 py-1.5 rounded border border-neutral-800">
-          <span>[W,A,S,D] Mover | [Ratón] Linterna | [Shift] Esprintar | [F] Sigilo | [E] Usar</span>
+        {/* Helper controls hint */}
+        <div className="hidden sm:block text-[11px] text-neutral-400 bg-black/80 px-3 py-1.5 rounded border border-neutral-800">
+          <span>[W,A,S,D] Mover | [Ratón] Linterna | [Shift] Esprintar | [F] Sigilo | [E] Interactuar</span>
         </div>
       </div>
     </div>
