@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-deep: #09080A;
+    --bg-surface: #120E17;
+    --bg-surface-elevated: #1A1422;
+    --color-violet: #530570;
+    --color-violet-bright: #8B1FD4;
+    --color-violet-glow: #A855F7;
+    --color-pastel: #F5F3F2;
+    --color-alert-red: #FF1E42;
+    --color-alert-red-glow: #FF4D6D;
+    --color-cyber-cyan: #00FFC2;
+    --color-warning-amber: #F59E0B;
+  }
+
+  body {
+    background-color: var(--bg-deep);
+    color: var(--color-pastel);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+    user-select: text;
+  }
+
+  /* Custom Tech Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #09080A;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #530570;
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #8B1FD4;
+  }
+}
+
+/* CRT Screen Scanlines & Glitch Effects */
+.crt-scanlines {
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.45) 50%
+  ),
+  linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.03),
+    rgba(0, 255, 0, 0.01),
+    rgba(0, 0, 255, 0.03)
+  );
+  background-size: 100% 3px, 6px 100%;
+  pointer-events: none;
+}
+
+.crt-vignette {
+  background: radial-gradient(circle at center, transparent 65%, rgba(0, 0, 0, 0.85) 100%);
+  pointer-events: none;
+}
+
+.crt-flicker {
+  animation: crtFlicker 0.15s infinite;
+}
+
+@keyframes crtFlicker {
+  0% { opacity: 0.985; }
+  50% { opacity: 1; }
+  100% { opacity: 0.975; }
+}
+
+/* Rolling scan bar */
+.scan-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+  background: linear-gradient(to bottom, transparent, rgba(139, 31, 212, 0.25), transparent);
+  animation: scanBarMove 8s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes scanBarMove {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+/* Sci-fi chamfered corner cuts */
+.chamfer-box {
+  clip-path: polygon(
+    0 10px,
+    10px 0,
+    calc(100% - 10px) 0,
+    100% 10px,
+    100% calc(100% - 10px),
+    calc(100% - 10px) 100%,
+    10px 100%,
+    0 calc(100% - 10px)
+  );
+}
+
+.chamfer-btn {
+  clip-path: polygon(
+    0 0,
+    calc(100% - 12px) 0,
+    100% 12px,
+    100% 100%,
+    12px 100%,
+    0 calc(100% - 12px)
+  );
+}
+
+/* Glitch animation utility */
+.glitch-text {
+  position: relative;
+  display: inline-block;
+}
+
+.glitch-text::before,
+.glitch-text::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.glitch-text::before {
+  left: 2px;
+  text-shadow: -2px 0 #530570;
+  clip: rect(24px, 550px, 90px, 0);
+  animation: glitch-anim-1 2s infinite linear alternate-reverse;
+}
+
+.glitch-text::after {
+  left: -2px;
+  text-shadow: -2px 0 #FF1E42;
+  clip: rect(85px, 550px, 140px, 0);
+  animation: glitch-anim-2 2.5s infinite linear alternate-reverse;
+}
+
+@keyframes glitch-anim-1 {
+  0% { clip: rect(20px, 9999px, 44px, 0); transform: skew(0.3deg); }
+  20% { clip: rect(62px, 9999px, 80px, 0); transform: skew(-0.2deg); }
+  40% { clip: rect(10px, 9999px, 30px, 0); transform: skew(0.1deg); }
+  60% { clip: rect(85px, 9999px, 100px, 0); transform: skew(-0.4deg); }
+  80% { clip: rect(40px, 9999px, 60px, 0); transform: skew(0.2deg); }
+  100% { clip: rect(12px, 9999px, 35px, 0); transform: skew(0deg); }
+}
+
+@keyframes glitch-anim-2 {
+  0% { clip: rect(75px, 9999px, 90px, 0); transform: skew(-0.3deg); }
+  25% { clip: rect(15px, 9999px, 35px, 0); transform: skew(0.2deg); }
+  50% { clip: rect(50px, 9999px, 70px, 0); transform: skew(-0.1deg); }
+  75% { clip: rect(90px, 9999px, 110px, 0); transform: skew(0.3deg); }
+  100% { clip: rect(30px, 9999px, 55px, 0); transform: skew(0deg); }
+}
+
+/* Pulsing Red Emergency Beacon */
+@keyframes emergencyPulse {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(255, 30, 66, 0.4), inset 0 0 15px rgba(255, 30, 66, 0.2);
+    border-color: rgba(255, 30, 66, 0.8);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(255, 30, 66, 0.8), inset 0 0 30px rgba(255, 30, 66, 0.5);
+    border-color: rgba(255, 30, 66, 1);
+  }
+}
+
+.emergency-alert {
+  animation: emergencyPulse 1.2s infinite ease-in-out;
+}
