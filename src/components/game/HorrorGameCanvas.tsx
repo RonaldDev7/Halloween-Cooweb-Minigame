@@ -48,6 +48,56 @@ interface Item {
   loreText?: string;
 }
 
+// Helper to check if a ray line intersects an axis-aligned wall box
+function lineIntersectsRect(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  rx: number,
+  ry: number,
+  rw: number,
+  rh: number
+): boolean {
+  // Check if either point is inside the rect
+  if (x1 >= rx && x1 <= rx + rw && y1 >= ry && y1 <= ry + rh) return true;
+  if (x2 >= rx && x2 <= rx + rw && y2 >= ry && y2 <= ry + rh) return true;
+
+  const linesIntersect = (
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    cx: number,
+    cy: number,
+    dx: number,
+    dy: number
+  ) => {
+    const denom = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+    if (denom === 0) return false;
+    const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / denom;
+    const u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / denom;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+  };
+
+  if (linesIntersect(x1, y1, x2, y2, rx, ry, rx + rw, ry)) return true;
+  if (linesIntersect(x1, y1, x2, y2, rx, ry + rh, rx + rw, ry + rh)) return true;
+  if (linesIntersect(x1, y1, x2, y2, rx, ry, rx, ry + rh)) return true;
+  if (linesIntersect(x1, y1, x2, y2, rx + rw, ry, rx + rw, ry + rh)) return true;
+
+  return false;
+}
+
+// Raycast Line of Sight
+function hasLineOfSight(x1: number, y1: number, x2: number, y2: number, wallList: Wall[]): boolean {
+  for (const wall of wallList) {
+    if (lineIntersectsRect(x1, y1, x2, y2, wall.x, wall.y, wall.w, wall.h)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   const { finishGame, triggerJumpscare, goToMenu } = useGame();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -67,7 +117,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     walkFrame: 0,
   });
 
-  // Ronald Monster state
+  // Ronald Monster state (With memory of last seen player position)
   const monsterRef = useRef({
     x: 1450,
     y: 950,
@@ -78,6 +128,8 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     waypointIdx: 0,
     stunnedTimer: 0,
     animFrame: 0,
+    lastSeenX: 1450,
+    lastSeenY: 950,
   });
 
   // Gameplay state
@@ -109,7 +161,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const mouseRef = useRef({ x: 400, y: 300 });
 
-  // Map elements definition (Detailed 4-Sector Laboratory)
+  // Map elements definition (Detailed 4-Sector Laboratory with Navigable Doorways)
   const walls: Wall[] = [
     // Outer perimeter
     { x: 0, y: 0, w: MAP_W, h: 25 },
@@ -119,11 +171,11 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
 
     // Sector 1: West Biolab (Top-Left)
     { x: 480, y: 25, w: 25, h: 420 },
-    { x: 25, y: 445, w: 340, h: 25 }, // Door gap at x:365-480
+    { x: 25, y: 445, w: 320, h: 25 }, // Generous Door gap at x:345-480
 
     // Sector 2: Server Core (Bottom-Left)
     { x: 480, y: 565, w: 25, h: 420 },
-    { x: 25, y: 960, w: 455, h: 25 }, // Door gap at x:480
+    { x: 25, y: 960, w: 320, h: 25 }, // Door gap at x:345-480
 
     // Central Pillar & Server Banks
     { x: 740, y: 340, w: 220, h: 200 },
@@ -131,26 +183,32 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
 
     // Sector 3: Cryo Vault & Archives (Bottom-Right)
     { x: 1200, y: 520, w: 25, h: 440 },
-    { x: 1200, y: 520, w: 320, h: 25 }, // Door gap at x:1520
-    { x: 1200, y: 960, w: 575, h: 25 },
+    { x: 1200, y: 520, w: 280, h: 25 }, // Door gap at x:1480-1620
+    { x: 1620, y: 520, w: 155, h: 25 },
+
+    // Dividing wall between Cryo Vault and Sector Gamma (with 140px doorway!)
+    { x: 1200, y: 960, w: 240, h: 25 }, // Doorway from x: 1440 to 1580
+    { x: 1580, y: 960, w: 195, h: 25 },
 
     // Sector 4: Airlock & Decontamination (Top-Right)
     { x: 1200, y: 25, w: 25, h: 380 },
-    { x: 1200, y: 405, w: 380, h: 25 }, // Door gap at x:1580
+    { x: 1200, y: 405, w: 280, h: 25 }, // Door gap at x:1480-1620
+    { x: 1620, y: 405, w: 155, h: 25 },
   ];
 
-  // Patrol waypoints for Ronald
+  // Patrol waypoints for Ronald (looping naturally through all doorways)
   const waypoints = [
-    { x: 1350, y: 240 },
-    { x: 1000, y: 240 },
-    { x: 600, y: 240 },
-    { x: 600, y: 680 },
-    { x: 1000, y: 680 },
-    { x: 1000, y: 1080 },
-    { x: 1450, y: 1080 },
-    { x: 1450, y: 680 },
-    { x: 280, y: 680 },
-    { x: 280, y: 240 },
+    { x: 240, y: 220 }, // Sector 1 Biolab
+    { x: 420, y: 500 }, // Sector 1 Doorway
+    { x: 620, y: 650 }, // Central Corridor North
+    { x: 1050, y: 650 }, // Central Hub
+    { x: 1520, y: 240 }, // Sector 4 Airlock Hall
+    { x: 1520, y: 720 }, // Cryo Vault
+    { x: 1510, y: 1100 }, // Sector Gamma (through the new doorway!)
+    { x: 1050, y: 1100 }, // South Hallway
+    { x: 420, y: 960 }, // Sector 2 Server Core Doorway
+    { x: 240, y: 1150 }, // Sector 2 Server Core
+    { x: 620, y: 650 }, // Back to Central Hub
   ];
 
   // Items initialized based on game mode
@@ -365,6 +423,57 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         return true;
       }
     }
+    return false;
+  };
+
+  // Obstacle-avoiding navigation for Ronald (Context Steering)
+  const moveWithAvoidance = (
+    entity: { x: number; y: number; angle: number },
+    targetX: number,
+    targetY: number,
+    speed: number,
+    radius = 20
+  ) => {
+    const desiredAngle = Math.atan2(targetY - entity.y, targetX - entity.x);
+
+    // Multi-angle test fanning out left and right to glide around walls
+    const angleOffsets = [
+      0,
+      0.35, -0.35,
+      0.7, -0.7,
+      1.05, -1.05,
+      1.4, -1.4,
+      1.75, -1.75,
+      2.1, -2.1,
+      Math.PI,
+    ];
+
+    for (const offset of angleOffsets) {
+      const testAngle = desiredAngle + offset;
+      const nextX = entity.x + Math.cos(testAngle) * speed;
+      const nextY = entity.y + Math.sin(testAngle) * speed;
+
+      if (!checkWallCollision(nextX, nextY, radius)) {
+        entity.x = nextX;
+        entity.y = nextY;
+        entity.angle = testAngle;
+        return true;
+      }
+    }
+
+    // Secondary fallback: slide along individual X or Y axis
+    const nextXOnly = entity.x + Math.cos(desiredAngle) * speed;
+    if (!checkWallCollision(nextXOnly, entity.y, radius)) {
+      entity.x = nextXOnly;
+      return true;
+    }
+
+    const nextYOnly = entity.y + Math.sin(desiredAngle) * speed;
+    if (!checkWallCollision(entity.x, nextYOnly, radius)) {
+      entity.y = nextYOnly;
+      return true;
+    }
+
     return false;
   };
 
@@ -603,33 +712,47 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
           heartbeatTimer = 0;
         }
 
+        // Line-of-sight test (cannot see through solid walls)
+        const hasLOS = hasLineOfSight(m.x, m.y, p.x, p.y, walls);
+
         // Detection tests
         let canSeePlayer = false;
         if (!p.inLocker) {
-          // Player flashlight pointing near monster
+          // 1. Player flashlight pointing near monster (requires LOS)
           const angleToMonster = Math.atan2(m.y - p.y, m.x - p.x);
           const angleDiff = Math.abs(p.angle - angleToMonster);
           const inFlashlightCone =
             p.flashlightOn &&
             p.battery > 0 &&
-            distToPlayer < 360 &&
-            (angleDiff < 0.55 || angleDiff > Math.PI * 2 - 0.55);
+            distToPlayer < 420 &&
+            hasLOS &&
+            (angleDiff < 0.6 || angleDiff > Math.PI * 2 - 0.6);
 
-          // Monster facing player directly
+          // 2. Monster vision cone facing player (requires LOS)
           const monsterFacingAngle = Math.atan2(p.y - m.y, p.x - m.x);
           const monsterDiff = Math.abs(m.angle - monsterFacingAngle);
-          const inMonsterField =
-            distToPlayer < 220 && (monsterDiff < 1.15 || monsterDiff > Math.PI * 2 - 1.15);
+          const inMonsterVision =
+            distToPlayer < 260 &&
+            hasLOS &&
+            (monsterDiff < 1.25 || monsterDiff > Math.PI * 2 - 1.25);
 
-          // Sound detection (sprinting creates noise)
-          const heardSprinting = isSprinting && (dx !== 0 || dy !== 0) && distToPlayer < 320;
+          // 3. Close proximity hearing / breath (even around corners)
+          const closeProximity = distToPlayer < 85;
 
-          if (inFlashlightCone || inMonsterField || heardSprinting) {
+          // 4. Sprinting noise
+          const heardSprinting =
+            isSprinting &&
+            (dx !== 0 || dy !== 0) &&
+            (distToPlayer < 190 || (distToPlayer < 350 && hasLOS));
+
+          if (inFlashlightCone || inMonsterVision || closeProximity || heardSprinting) {
             canSeePlayer = true;
           }
         }
 
         if (canSeePlayer) {
+          m.lastSeenX = p.x;
+          m.lastSeenY = p.y;
           if (m.state !== "CHASE") {
             soundFX.playMonsterGrowl();
             soundFX.startChaseMusic();
@@ -640,7 +763,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
             });
           }
           m.state = "CHASE";
-          m.alertTimer = 180; // Persistence frames
+          m.alertTimer = 240; // Persistence frames (~4 seconds)
         } else if (m.state === "CHASE") {
           m.alertTimer--;
           if (m.alertTimer <= 0) {
@@ -654,28 +777,26 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         let targetY = 0;
 
         if (m.state === "CHASE") {
-          targetX = p.x;
-          targetY = p.y;
+          if (hasLOS) {
+            targetX = p.x;
+            targetY = p.y;
+          } else {
+            // Rush to the last seen position!
+            targetX = m.lastSeenX;
+            targetY = m.lastSeenY;
+          }
         } else {
           const wp = waypoints[m.waypointIdx];
           targetX = wp.x;
           targetY = wp.y;
-          if (Math.hypot(m.x - wp.x, m.y - wp.y) < 35) {
+          if (Math.hypot(m.x - wp.x, m.y - wp.y) < 40) {
             m.waypointIdx = (m.waypointIdx + 1) % waypoints.length;
           }
         }
 
-        const mAngle = Math.atan2(targetY - m.y, targetX - m.x);
-        m.angle = mAngle;
         const mSpeed = m.state === "CHASE" ? m.speed * 1.35 : m.speed;
-
-        const mNextX = m.x + Math.cos(mAngle) * mSpeed;
-        const mNextY = m.y + Math.sin(mAngle) * mSpeed;
-
-        if (!checkWallCollision(mNextX, m.y, 24)) m.x = mNextX;
-        if (!checkWallCollision(m.x, mNextY, 24)) m.y = mNextY;
-
-        m.animFrame += m.state === "CHASE" ? 0.25 : 0.12;
+        moveWithAvoidance(m, targetX, targetY, mSpeed, 20);
+        m.animFrame += m.state === "CHASE" ? 0.28 : 0.12;
 
         // Check Jumpscare Collision!
         if (!p.inLocker && distToPlayer < 42) {
@@ -742,8 +863,11 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       ctx.strokeStyle = "rgba(245, 158, 11, 0.35)";
       ctx.lineWidth = 3;
       ctx.setLineDash([10, 10]);
-      ctx.strokeRect(365, 435, 115, 20);
-      ctx.strokeRect(1200, 395, 20, 110);
+      ctx.strokeRect(345, 440, 135, 25); // Sector 1 Biolab door
+      ctx.strokeRect(345, 955, 135, 25); // Sector 2 Server door
+      ctx.strokeRect(1480, 515, 140, 25); // Sector 3 Cryo door
+      ctx.strokeRect(1440, 955, 140, 25); // Sector Gamma door
+      ctx.strokeRect(1480, 400, 140, 25); // Sector 4 Airlock door
       ctx.setLineDash([]);
 
       // Mutant bio-fluid puddles / blood stains on the ground
