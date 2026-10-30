@@ -114,6 +114,8 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     battery: 100,
     inLocker: false,
     currentLockerId: null as string | null,
+    lockerExitTime: 0,
+    lockerCooldownUntil: 0,
     walkFrame: 0,
   });
 
@@ -495,14 +497,16 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   const handleInteraction = () => {
     const p = playerRef.current;
 
-    // If already in locker, exit
+    // If already in locker/hatch, exit and trigger 10s cooldown
     if (p.inLocker) {
       p.inLocker = false;
       p.currentLockerId = null;
+      p.lockerExitTime = 0;
+      p.lockerCooldownUntil = Date.now() + 10000;
       setInLockerUi(false);
       soundFX.playFootstep();
       setRadioMsg({
-        text: "HAS SALIDO DE LA TAQUILLA. Mantente alerta.",
+        text: "HAS SALIDO DE LA TRAMPILLA. Cooldown de escondite activo: 10s.",
         sender: "BIO-RADAR",
         time: Date.now() + 3000,
       });
@@ -555,16 +559,29 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
           return;
         }
 
-        // Hide in Locker
+        // Hide in Locker / Hatch (Max 3s duration, 10s cooldown after exit)
         if (item.type === "LOCKER") {
+          const now = Date.now();
+          if (now < p.lockerCooldownUntil) {
+            const remCd = Math.ceil((p.lockerCooldownUntil - now) / 1000);
+            soundFX.playHeartbeat(2);
+            setRadioMsg({
+              text: `TRAMPILLA BLOQUEADA: Espera ${remCd}s de cooldown para volver a esconderte.`,
+              sender: "SISTEMA DE CONTENCIÓN",
+              time: now + 2500,
+            });
+            return;
+          }
+
           p.inLocker = true;
           p.currentLockerId = item.id;
+          p.lockerExitTime = now + 3000;
           setInLockerUi(true);
           soundFX.playFootstep();
           setRadioMsg({
-            text: "OCULTO EN LA TAQUILLA. Ronald pasará de largo si no te vio entrar.",
+            text: "OCULTO EN TRAMPILLA (MÁX 3s). Saldrás automáticamente en 3 segundos.",
             sender: "MODO SIGILO",
-            time: Date.now() + 4000,
+            time: now + 3000,
           });
           return;
         }
@@ -639,6 +656,21 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
 
       const viewW = canvas.width;
       const viewH = canvas.height;
+
+      // 0. Check 3-second max hiding duration in locker/hatch
+      if (p.inLocker && p.lockerExitTime > 0 && Date.now() >= p.lockerExitTime) {
+        p.inLocker = false;
+        p.currentLockerId = null;
+        p.lockerExitTime = 0;
+        p.lockerCooldownUntil = Date.now() + 10000; // 10s cooldown before re-entering
+        setInLockerUi(false);
+        soundFX.playFootstep(true);
+        setRadioMsg({
+          text: "¡LÍMITE DE 3s ALCANZADO! Has sido expulsado de la trampilla. Cooldown: 10s.",
+          sender: "SISTEMA DE CONTENCIÓN",
+          time: Date.now() + 3500,
+        });
+      }
 
       // 1. Player Movement & Stamina Logic
       const keys = keysRef.current;
@@ -843,14 +875,19 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
 
       // Check nearby interactable for HUD prompt
       let promptText: string | null = null;
+      const nowMs = Date.now();
       if (p.inLocker) {
-        promptText = "[E] SALIR DE LA TAQUILLA";
+        const remHide = Math.max(0, (p.lockerExitTime - nowMs) / 1000).toFixed(1);
+        promptText = `OCULTO EN TRAMPILLA (${remHide}s) // [E] SALIR AHORA`;
       } else {
         for (const item of items) {
           if (item.collected) continue;
           if (Math.hypot(p.x - item.x, p.y - item.y) < item.radius + 35) {
             if (item.type === "TERMINAL" && !item.active) {
               promptText = "TERMINAL REINICIÁNDOSE... (ESPERA)";
+            } else if (item.type === "LOCKER" && nowMs < p.lockerCooldownUntil) {
+              const remCd = Math.ceil((p.lockerCooldownUntil - nowMs) / 1000);
+              promptText = `TRAMPILLA BLOQUEADA (COOLDOWN: ${remCd}s)`;
             } else {
               promptText = `[E] ${item.label}`;
             }
@@ -963,9 +1000,12 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
           ctx.textAlign = "center";
           ctx.fillText("PWR", item.x, item.y - 18);
         } else if (item.type === "LOCKER") {
-          // Metal Locker / Hiding place
-          ctx.fillStyle = "#261D32";
-          ctx.strokeStyle = "#8B1FD4";
+          // Metal Locker / Hatch Hiding place
+          const isOccupied = p.inLocker && p.currentLockerId === item.id;
+          const isOnCooldown = nowMs < p.lockerCooldownUntil;
+
+          ctx.fillStyle = isOccupied ? "#3B0A1E" : isOnCooldown ? "#1C1624" : "#261D32";
+          ctx.strokeStyle = isOccupied ? "#FF1E42" : isOnCooldown ? "#F59E0B" : "#8B1FD4";
           ctx.lineWidth = 2;
           ctx.fillRect(item.x - 16, item.y - 16, 32, 32);
           ctx.strokeRect(item.x - 16, item.y - 16, 32, 32);
@@ -976,11 +1016,24 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
           ctx.fillRect(item.x - 10, item.y - 1, 20, 3);
           ctx.fillRect(item.x - 10, item.y + 6, 20, 3);
 
-          // Door Status LED (Green = Available, Red = Occupied)
-          ctx.fillStyle = p.inLocker && p.currentLockerId === item.id ? "#FF1E42" : "#00FFC2";
+          // Door Status LED (Green = Available, Amber = Cooldown, Red = Occupied)
+          ctx.fillStyle = isOccupied ? "#FF1E42" : isOnCooldown ? "#F59E0B" : "#00FFC2";
           ctx.beginPath();
           ctx.arc(item.x + 10, item.y - 10, 2.5, 0, Math.PI * 2);
           ctx.fill();
+
+          // Status text above hatch
+          ctx.font = "bold 8px monospace";
+          ctx.textAlign = "center";
+          if (isOccupied) {
+            const remH = Math.max(0, (p.lockerExitTime - nowMs) / 1000).toFixed(1);
+            ctx.fillStyle = "#FF1E42";
+            ctx.fillText(`HIDE: ${remH}s`, item.x, item.y - 20);
+          } else if (isOnCooldown) {
+            const remC = Math.ceil((p.lockerCooldownUntil - nowMs) / 1000);
+            ctx.fillStyle = "#F59E0B";
+            ctx.fillText(`CD: ${remC}s`, item.x, item.y - 20);
+          }
         } else if (item.type === "TERMINAL") {
           // Supercomputer Terminal
           ctx.fillStyle = item.active ? "#361D4C" : "#1A1522";
