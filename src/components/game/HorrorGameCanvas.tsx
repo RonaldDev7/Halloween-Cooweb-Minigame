@@ -160,9 +160,16 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   // EMP visual pulse animation
   const [empFlash, setEmpFlash] = useState(false);
 
-  // Key states
+  // Key & Mobile Touch states
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const mouseRef = useRef({ x: 400, y: 300 });
+  const touchJoyRef = useRef({ active: false, dx: 0, dy: 0 });
+  const [joyKnob, setJoyKnob] = useState({ x: 0, y: 0 });
+  const touchSprintRef = useRef(false);
+  const [isTouchSprinting, setIsTouchSprinting] = useState(false);
+  const lastAimAngleRef = useRef(0);
+  const isUsingTouchRef = useRef(false);
+  const joyBaseRef = useRef<HTMLDivElement>(null);
 
   // Map elements definition (Detailed 4-Sector Laboratory with Navigable Doorways)
   const walls: Wall[] = [
@@ -381,6 +388,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      isUsingTouchRef.current = false;
       mouseRef.current = {
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
@@ -397,6 +405,44 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       window.removeEventListener("mousemove", onMouseMove);
     };
   });
+
+  // Virtual Joystick Touch Handlers for Mobile Phones
+  const updateJoystick = (clientX: number, clientY: number) => {
+    const base = joyBaseRef.current;
+    if (!base) return;
+    const rect = base.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const maxRadius = 40;
+
+    const rawDx = clientX - centerX;
+    const rawDy = clientY - centerY;
+    const dist = Math.hypot(rawDx, rawDy);
+    const clampedDist = Math.min(maxRadius, dist);
+    const angle = Math.atan2(rawDy, rawDx);
+
+    const knobX = Math.cos(angle) * clampedDist;
+    const knobY = Math.sin(angle) * clampedDist;
+    setJoyKnob({ x: knobX, y: knobY });
+
+    const normMag = clampedDist / maxRadius;
+    if (normMag > 0.12) {
+      isUsingTouchRef.current = true;
+      lastAimAngleRef.current = angle;
+      touchJoyRef.current = {
+        active: true,
+        dx: Math.cos(angle) * normMag,
+        dy: Math.sin(angle) * normMag,
+      };
+    } else {
+      touchJoyRef.current = { active: false, dx: 0, dy: 0 };
+    }
+  };
+
+  const resetJoystick = () => {
+    touchJoyRef.current = { active: false, dx: 0, dy: 0 };
+    setJoyKnob({ x: 0, y: 0 });
+  };
 
   // Survival Timer & Score Interval
   useEffect(() => {
@@ -674,23 +720,29 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         });
       }
 
-      // 1. Player Movement & Stamina Logic
+      // 1. Player Movement & Stamina Logic (Keyboard + Mobile Touch Joystick)
       const keys = keysRef.current;
-      const isSprinting = (keys["shift"] || keys["shiftleft"]) && p.stamina > 10;
+      const isSprinting =
+        (keys["shift"] || keys["shiftleft"] || touchSprintRef.current) && p.stamina > 10;
       const currentSpeed = isSprinting ? 5.2 : 3.4;
 
       let dx = 0;
       let dy = 0;
 
       if (!p.inLocker) {
-        if (keys["w"] || keys["arrowup"]) dy -= 1;
-        if (keys["s"] || keys["arrowdown"]) dy += 1;
-        if (keys["a"] || keys["arrowleft"]) dx -= 1;
-        if (keys["d"] || keys["arrowright"]) dx += 1;
+        if (touchJoyRef.current.active) {
+          dx = touchJoyRef.current.dx;
+          dy = touchJoyRef.current.dy;
+        } else {
+          if (keys["w"] || keys["arrowup"]) dy -= 1;
+          if (keys["s"] || keys["arrowdown"]) dy += 1;
+          if (keys["a"] || keys["arrowleft"]) dx -= 1;
+          if (keys["d"] || keys["arrowright"]) dx += 1;
 
-        if (dx !== 0 && dy !== 0) {
-          dx *= 0.7071;
-          dy *= 0.7071;
+          if (dx !== 0 && dy !== 0) {
+            dx *= 0.7071;
+            dy *= 0.7071;
+          }
         }
 
         const nextX = p.x + dx * currentSpeed;
@@ -735,10 +787,15 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
           ? -(viewH - MAP_H) / 2
           : Math.max(0, Math.min(MAP_H - viewH, p.y - viewH / 2));
 
-      // Calculate player flashlight angle from screen position to mouse
+      // Calculate player flashlight angle (Mouse on desktop, Joystick/Touch on mobile)
       const screenPx = p.x - camX;
       const screenPy = p.y - camY;
-      p.angle = Math.atan2(mouseRef.current.y - screenPy, mouseRef.current.x - screenPx);
+      if (isUsingTouchRef.current) {
+        p.angle = lastAimAngleRef.current;
+      } else {
+        p.angle = Math.atan2(mouseRef.current.y - screenPy, mouseRef.current.x - screenPx);
+        lastAimAngleRef.current = p.angle;
+      }
 
       // 3. Ronald AI Perception & Decision
       const distToPlayer = Math.hypot(p.x - m.x, p.y - m.y);
@@ -1311,10 +1368,11 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     m: { x: number; y: number; state: string },
     currentItems: Item[]
   ) => {
-    const radarW = 150;
-    const radarH = 112;
-    const radarX = viewW - radarW - 20;
-    const radarY = viewH - radarH - 65;
+    const isMobileView = viewW < 768;
+    const radarW = isMobileView ? 112 : 150;
+    const radarH = isMobileView ? 84 : 112;
+    const radarX = viewW - radarW - (isMobileView ? 12 : 20);
+    const radarY = isMobileView ? 62 : viewH - radarH - 65;
 
     // Background Panel
     ctx.save();
@@ -1396,7 +1454,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   };
 
   return (
-    <div className="relative w-full h-screen bg-[#09080A] overflow-hidden select-none font-mono">
+    <div className="relative w-full h-screen bg-[#09080A] overflow-hidden select-none touch-none font-mono">
       {/* EMP Shockwave Screen Flash */}
       {empFlash && (
         <div className="fixed inset-0 z-30 bg-[#8B1FD4]/40 mix-blend-screen pointer-events-none animate-pulse" />
@@ -1407,39 +1465,81 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         <div className="fixed inset-0 z-20 pointer-events-none border-4 border-[#FF1E42]/50 shadow-[inset_0_0_90px_rgba(255,30,66,0.45)] animate-pulse" />
       )}
 
-      {/* 2D Canvas Viewport */}
+      {/* 2D Canvas Viewport (Touch on canvas aims flashlight) */}
       <canvas
         ref={canvasRef}
         width={typeof window !== "undefined" ? window.innerWidth : 1280}
         height={typeof window !== "undefined" ? window.innerHeight : 800}
-        className="w-full h-full block cursor-crosshair"
+        className="w-full h-full block cursor-crosshair touch-none"
+        onTouchStart={(e) => {
+          const touch = e.touches[0];
+          const canvas = canvasRef.current;
+          if (!touch || !canvas) return;
+          const rect = canvas.getBoundingClientRect();
+          const tx = touch.clientX - rect.left;
+          const ty = touch.clientY - rect.top;
+          const p = playerRef.current;
+          const viewW = canvas.width;
+          const viewH = canvas.height;
+          const camX =
+            viewW >= MAP_W
+              ? -(viewW - MAP_W) / 2
+              : Math.max(0, Math.min(MAP_W - viewW, p.x - viewW / 2));
+          const camY =
+            viewH >= MAP_H
+              ? -(viewH - MAP_H) / 2
+              : Math.max(0, Math.min(MAP_H - viewH, p.y - viewH / 2));
+          isUsingTouchRef.current = true;
+          lastAimAngleRef.current = Math.atan2(ty - (p.y - camY), tx - (p.x - camX));
+        }}
+        onTouchMove={(e) => {
+          const touch = e.touches[0];
+          const canvas = canvasRef.current;
+          if (!touch || !canvas) return;
+          const rect = canvas.getBoundingClientRect();
+          const tx = touch.clientX - rect.left;
+          const ty = touch.clientY - rect.top;
+          const p = playerRef.current;
+          const viewW = canvas.width;
+          const viewH = canvas.height;
+          const camX =
+            viewW >= MAP_W
+              ? -(viewW - MAP_W) / 2
+              : Math.max(0, Math.min(MAP_W - viewW, p.x - viewW / 2));
+          const camY =
+            viewH >= MAP_H
+              ? -(viewH - MAP_H) / 2
+              : Math.max(0, Math.min(MAP_H - viewH, p.y - viewH / 2));
+          isUsingTouchRef.current = true;
+          lastAimAngleRef.current = Math.atan2(ty - (p.y - camY), tx - (p.x - camX));
+        }}
       />
 
       {/* Screen edge CRT vignette */}
       <div className="absolute inset-0 crt-vignette pointer-events-none opacity-80" />
 
-      {/* TOP HUD BAR */}
-      <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none z-20">
+      {/* TOP HUD BAR (Responsive for Desktop & Mobile) */}
+      <div className="absolute top-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none z-20">
         {/* Top Left: Logo, Menu & Timer */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <button
             onClick={goToMenu}
-            className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded bg-black/80 border border-[#530570]/80 hover:border-[#8B1FD4] transition-all cursor-pointer"
+            className="pointer-events-auto flex items-center gap-1.5 px-2 py-1.5 rounded bg-black/80 border border-[#530570]/80 hover:border-[#8B1FD4] transition-all cursor-pointer"
             title="Volver al menú principal"
           >
             <img
               src="/images/cooweb-logo.png"
               alt="CooWeb"
-              style={{ width: "28px", height: "28px", objectFit: "contain", flexShrink: 0 }}
+              style={{ width: "24px", height: "24px", objectFit: "contain", flexShrink: 0 }}
             />
             <span className="text-[10px] text-neutral-300 font-bold hidden sm:inline">MENÚ</span>
           </button>
-          <div className="bg-[#120E17]/90 border border-[#530570]/70 px-3 py-1.5 rounded text-xs flex items-center gap-2">
-            <span className="font-bold text-[#F5F3F2]">
-              {mode === "ESCAPE" ? "MODO ESCAPE" : "PROTOCOLO: CONTENCIÓN"}
+          <div className="bg-[#120E17]/90 border border-[#530570]/70 px-2.5 py-1.5 rounded text-[11px] sm:text-xs flex items-center gap-2">
+            <span className="font-bold text-[#F5F3F2] hidden xs:inline">
+              {mode === "ESCAPE" ? "ESCAPE" : "CONTENCIÓN"}
             </span>
-            <span className="text-neutral-500">|</span>
-            <span className="text-[#00FFC2] flex items-center gap-1">
+            <span className="text-neutral-500 hidden xs:inline">|</span>
+            <span className="text-[#00FFC2] flex items-center gap-1 font-bold">
               <Activity className="w-3.5 h-3.5 animate-pulse" />
               {String(Math.floor(survivalSecs / 60)).padStart(2, "0")}:
               {String(survivalSecs % 60).padStart(2, "0")}
@@ -1448,24 +1548,23 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         </div>
 
         {/* Center Objectives */}
-        <div className="bg-[#120E17]/90 border border-[#530570]/70 px-4 py-1.5 rounded text-xs flex items-center gap-3">
+        <div className="bg-[#120E17]/90 border border-[#530570]/70 px-3 py-1.5 rounded text-[11px] sm:text-xs flex items-center gap-2">
           {mode === "ESCAPE" ? (
             <>
-              <span className="text-neutral-400">FRAGMENTOS:</span>
-              <span className="text-[#00FFC2] font-black">{fragmentsCount} / 3</span>
+              <span className="text-neutral-400 hidden sm:inline">FRAGMENTOS:</span>
+              <span className="text-[#00FFC2] font-black">{fragmentsCount}/3</span>
               <span className="text-neutral-500">|</span>
               <span className={exitUnlocked ? "text-[#00FFC2] font-bold animate-pulse" : "text-[#FF1E42]"}>
-                {exitUnlocked ? "ESCLUSA: DESBLOQUEADA" : "ESCLUSA: BLOQUEADA"}
+                {exitUnlocked ? "ABIERTA" : "BLOQUEADA"}
               </span>
             </>
           ) : (
             <>
-              <span className="text-neutral-400">PUNTUACIÓN:</span>
               <span className="text-[#00FFC2] font-black">{score.toLocaleString()} PTS</span>
               <span className="text-neutral-500">|</span>
               <span className="text-[#FF1E42] font-bold flex items-center gap-1">
                 <ShieldAlert className="w-3.5 h-3.5" />
-                AMENAZA: LVL {threatLevel}
+                LVL {threatLevel}
               </span>
             </>
           )}
@@ -1474,13 +1573,13 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         {/* Top Right: Status Gauges */}
         <div className="flex items-center gap-2">
           {/* Battery */}
-          <div className="bg-[#120E17]/90 border border-[#530570]/70 px-3 py-1.5 rounded text-xs flex items-center gap-2">
+          <div className="bg-[#120E17]/90 border border-[#530570]/70 px-2.5 py-1.5 rounded text-[11px] sm:text-xs flex items-center gap-1.5">
             {batteryUi < 20 ? (
               <Battery className="w-4 h-4 text-[#FF1E42] animate-bounce" />
             ) : (
               <BatteryCharging className="w-4 h-4 text-[#F59E0B]" />
             )}
-            <span className="text-[10px] text-neutral-400">LINTERNA:</span>
+            <span className="text-[10px] text-neutral-400 hidden sm:inline">LINTERNA:</span>
             <span className={`font-bold ${batteryUi < 20 ? "text-[#FF1E42]" : "text-[#F59E0B]"}`}>
               {batteryUi}%
             </span>
@@ -1503,33 +1602,158 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
 
       {/* Tactical Radio Transmission Toast (Lore & Guidance) */}
       {radioMsg && Date.now() < radioMsg.time && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-none w-[90%] max-w-xl">
-          <div className="px-4 py-2 bg-black/90 border-l-4 border-l-[#8B1FD4] border border-[#530570]/70 rounded shadow-[0_0_25px_rgba(83,5,112,0.5)] flex items-center gap-3">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-none w-[92%] max-w-xl">
+          <div className="px-3.5 py-2 bg-black/90 border-l-4 border-l-[#8B1FD4] border border-[#530570]/70 rounded shadow-[0_0_25px_rgba(83,5,112,0.5)] flex items-center gap-3">
             <Radio className="w-4 h-4 text-[#00FFC2] shrink-0 animate-pulse" />
             <div className="text-left">
               <div className="text-[9px] font-bold text-[#8B1FD4] uppercase tracking-wider">
                 {radioMsg.sender}
               </div>
-              <div className="text-xs text-[#F5F3F2] font-semibold">{radioMsg.text}</div>
+              <div className="text-[11px] sm:text-xs text-[#F5F3F2] font-semibold">{radioMsg.text}</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Interaction Prompt Box */}
+      {/* Interaction Prompt Box (Tappable on Mobile!) */}
       {interactPrompt && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-          <div className="px-5 py-2.5 bg-black/90 border border-[#8B1FD4] text-[#F5F3F2] text-xs font-bold rounded shadow-[0_0_20px_rgba(139,31,212,0.6)] animate-bounce flex items-center gap-2">
+        <div className="absolute bottom-36 md:bottom-20 left-1/2 -translate-x-1/2 z-30">
+          <button
+            type="button"
+            onClick={handleInteraction}
+            onTouchStart={(e) => {
+              e.stopPropagation();
+              handleInteraction();
+            }}
+            className="pointer-events-auto cursor-pointer px-5 py-2.5 bg-black/90 border border-[#00FFC2] text-[#F5F3F2] text-xs font-bold rounded shadow-[0_0_20px_rgba(0,255,194,0.5)] animate-bounce flex items-center gap-2 active:scale-95"
+          >
             <KeyRound className="w-4 h-4 text-[#00FFC2]" />
             <span>{interactPrompt}</span>
-          </div>
+          </button>
         </div>
       )}
 
+      {/* MOBILE TOUCH CONTROLS (Virtual Joystick + Tactical Action Buttons) */}
+      <div className="md:hidden fixed inset-x-0 bottom-14 z-30 pointer-events-none flex items-end justify-between px-5">
+        {/* Left: Virtual Analog Thumbstick */}
+        <div
+          ref={joyBaseRef}
+          onTouchStart={(e) => {
+            e.stopPropagation();
+            const t = e.touches[0];
+            if (t) updateJoystick(t.clientX, t.clientY);
+          }}
+          onTouchMove={(e) => {
+            e.stopPropagation();
+            const t = e.touches[0];
+            if (t) updateJoystick(t.clientX, t.clientY);
+          }}
+          onTouchEnd={(e) => {
+            e.stopPropagation();
+            resetJoystick();
+          }}
+          onTouchCancel={(e) => {
+            e.stopPropagation();
+            resetJoystick();
+          }}
+          className="pointer-events-auto relative w-28 h-28 rounded-full bg-black/75 border-2 border-[#8B1FD4]/80 shadow-[0_0_25px_rgba(139,31,212,0.45)] flex items-center justify-center touch-none"
+        >
+          {/* Crosshair guide lines */}
+          <div className="absolute inset-3 rounded-full border border-[#530570]/50 pointer-events-none" />
+          {/* Movable Thumbstick Knob */}
+          <div
+            style={{
+              transform: `translate(${joyKnob.x}px, ${joyKnob.y}px)`,
+            }}
+            className="w-12 h-12 rounded-full bg-gradient-to-br from-[#8B1FD4] to-[#530570] border-2 border-[#00FFC2] shadow-[0_0_15px_rgba(0,255,194,0.6)] pointer-events-none flex items-center justify-center"
+          >
+            <Compass className="w-5 h-5 text-[#F5F3F2]" />
+          </div>
+        </div>
+
+        {/* Right: Tactical Touch Action Buttons (USAR, SPRINT, LUZ) */}
+        <div className="pointer-events-auto flex flex-col items-end gap-2.5 touch-none">
+          <div className="flex items-center gap-2.5">
+            {/* Flashlight / Stealth Toggle Button */}
+            <button
+              type="button"
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                soundFX.playFlashlightClick();
+                playerRef.current.flashlightOn = !playerRef.current.flashlightOn;
+                setFlashlightUi(playerRef.current.flashlightOn);
+              }}
+              onClick={() => {
+                soundFX.playFlashlightClick();
+                playerRef.current.flashlightOn = !playerRef.current.flashlightOn;
+                setFlashlightUi(playerRef.current.flashlightOn);
+              }}
+              className={`w-13 h-13 rounded-full border-2 flex flex-col items-center justify-center text-[9px] font-bold transition-all active:scale-90 ${
+                flashlightUi
+                  ? "bg-[#181224]/90 border-[#00FFC2] text-[#00FFC2] shadow-[0_0_15px_rgba(0,255,194,0.35)]"
+                  : "bg-black/85 border-neutral-600 text-neutral-400"
+              }`}
+            >
+              {flashlightUi ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              <span>LUZ</span>
+            </button>
+
+            {/* Sprint Hold Button */}
+            <button
+              type="button"
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                touchSprintRef.current = true;
+                setIsTouchSprinting(true);
+              }}
+              onTouchEnd={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                touchSprintRef.current = false;
+                setIsTouchSprinting(false);
+              }}
+              onTouchCancel={() => {
+                touchSprintRef.current = false;
+                setIsTouchSprinting(false);
+              }}
+              className={`w-14 h-14 rounded-full border-2 flex flex-col items-center justify-center text-[9px] font-bold transition-all ${
+                isTouchSprinting
+                  ? "bg-[#FF1E42]/80 border-white text-white scale-95 shadow-[0_0_20px_rgba(255,30,66,0.7)]"
+                  : "bg-[#181224]/90 border-[#8B1FD4] text-[#F5F3F2] shadow-[0_0_15px_rgba(139,31,212,0.4)]"
+              }`}
+            >
+              <Flame className="w-4 h-4 text-[#F59E0B]" />
+              <span>CORRER</span>
+            </button>
+          </div>
+
+          {/* Primary Interact [E] Button */}
+          <button
+            type="button"
+            onTouchStart={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              handleInteraction();
+            }}
+            onClick={handleInteraction}
+            className={`w-16 h-16 rounded-full border-2 flex flex-col items-center justify-center text-[10px] font-black transition-all active:scale-90 ${
+              interactPrompt
+                ? "bg-[#00FFC2]/25 border-[#00FFC2] text-[#00FFC2] shadow-[0_0_25px_rgba(0,255,194,0.8)] animate-pulse"
+                : "bg-black/85 border-[#530570] text-neutral-300"
+            }`}
+          >
+            <KeyRound className="w-5 h-5" />
+            <span>USAR [E]</span>
+          </button>
+        </div>
+      </div>
+
       {/* Bottom Status Ribbon (Stamina & Controls) */}
-      <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between text-xs pointer-events-none z-20">
+      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-xs pointer-events-none z-20">
         {/* Stamina bar */}
-        <div className="bg-[#120E17]/90 border border-[#530570]/70 px-4 py-2 rounded flex items-center gap-2">
+        <div className="bg-[#120E17]/90 border border-[#530570]/70 px-3 py-1.5 rounded flex items-center gap-2">
           <Flame className={`w-4 h-4 ${staminaUi < 25 ? "text-[#FF1E42]" : "text-[#8B1FD4]"}`} />
           <span className="text-[10px] text-neutral-400">ESTAMINA:</span>
           <div className="w-24 sm:w-32 h-2 bg-black rounded-full overflow-hidden border border-neutral-700">
@@ -1541,7 +1765,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
         </div>
 
         {/* Helper controls hint */}
-        <div className="hidden sm:block text-[11px] text-neutral-400 bg-black/80 px-3 py-1.5 rounded border border-neutral-800">
+        <div className="hidden md:block text-[11px] text-neutral-400 bg-black/80 px-3 py-1.5 rounded border border-neutral-800">
           <span>[W,A,S,D] Mover | [Ratón] Linterna | [Shift] Esprintar | [F] Sigilo | [E] Interactuar</span>
         </div>
       </div>
