@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useRef, useEffect, useState, useCallback } from "react";
-import Image from "next/image";
 import { useGame } from "@/context/GameContext";
 import { soundFX } from "@/lib/audio/soundFX";
 import {
@@ -683,9 +682,18 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       {/* Top HUD Bar */}
       <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none z-20">
         <div className="flex items-center gap-3">
-          <div className="relative w-8 h-8 pointer-events-auto cursor-pointer" onClick={goToMenu}>
-            <Image src="/images/cooweb-logo.png" alt="CooWeb" fill className="object-contain" />
-          </div>
+          <button
+            onClick={goToMenu}
+            className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded bg-black/80 border border-[#530570]/80 hover:border-[#8B1FD4] transition-all cursor-pointer"
+            title="Volver al menú principal"
+          >
+            <img
+              src="/images/cooweb-logo.png"
+              alt="CooWeb"
+              style={{ width: "28px", height: "28px", objectFit: "contain", flexShrink: 0 }}
+            />
+            <span className="text-[10px] text-neutral-300 font-bold hidden sm:inline">MENÚ</span>
+          </button>
           <div className="bg-[#120E17]/90 border border-[#530570]/70 px-3 py-1.5 rounded text-xs flex items-center gap-2">
             <span className="font-bold text-[#F5F3F2]">
               {mode === "ESCAPE" ? "MODO ESCAPE" : "PROTOCOLO: CONTENCIÓN"}

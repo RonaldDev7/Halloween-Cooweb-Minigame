@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useRef } from "react";
-import Image from "next/image";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 
@@ -45,13 +44,16 @@ export function JumpscareOverlay() {
       <div className="absolute inset-0 bg-[#FF1E42]/40 mix-blend-color-burn animate-ping pointer-events-none" />
 
       {/* Ronald Monster Visual */}
-      <div ref={imageRef} className="relative w-full h-full max-w-5xl max-h-screen">
-        <Image
+      <div ref={imageRef} className="relative w-full h-full max-w-5xl max-h-screen flex items-center justify-center">
+        <img
           src="/images/ronald-monster.jpg"
           alt="Ronald Biomechanical Monster"
-          fill
-          priority
-          className="object-cover sm:object-contain drop-shadow-[0_0_80px_rgba(255,30,66,0.9)]"
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            filter: "drop-shadow(0 0 80px rgba(255, 30, 66, 0.9))",
+          }}
         />
 
         {/* Glitch CRT Lines over monster */}

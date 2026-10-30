@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import Image from "next/image";
 import { fetchLeaderboard, LeaderboardEntry } from "@/lib/supabase";
 import { useGame } from "@/context/GameContext";
 import { soundFX } from "@/lib/audio/soundFX";
@@ -38,9 +37,11 @@ export function LeaderboardModal() {
         {/* Header */}
         <div className="p-4 sm:p-6 bg-[#181220] border-b border-[#530570] flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="relative w-8 h-8">
-              <Image src="/images/cooweb-logo.png" alt="CooWeb" fill className="object-contain" />
-            </div>
+            <img
+              src="/images/cooweb-logo.png"
+              alt="CooWeb"
+              style={{ width: "36px", height: "36px", objectFit: "contain", flexShrink: 0 }}
+            />
             <div>
               <div className="flex items-center gap-2">
                 <Trophy className="w-4 h-4 text-[#F59E0B]" />
