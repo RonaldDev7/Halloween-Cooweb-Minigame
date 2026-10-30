@@ -117,19 +117,19 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     walkFrame: 0,
   });
 
-  // Ronald Monster state (With memory of last seen player position)
+  // Ronald Monster state (Spawns in open Central East Corridor, actively patrolling)
   const monsterRef = useRef({
-    x: 1450,
-    y: 950,
+    x: 1080,
+    y: 660,
     angle: 0,
-    speed: 2.7,
+    speed: 2.9,
     state: "PATROL" as "PATROL" | "ALERT" | "CHASE",
     alertTimer: 0,
-    waypointIdx: 0,
+    waypointIdx: 1,
     stunnedTimer: 0,
     animFrame: 0,
-    lastSeenX: 1450,
-    lastSeenY: 950,
+    lastSeenX: 1080,
+    lastSeenY: 660,
   });
 
   // Gameplay state
@@ -196,19 +196,26 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     { x: 1620, y: 405, w: 155, h: 25 },
   ];
 
-  // Patrol waypoints for Ronald (looping naturally through all doorways)
+  // Patrol waypoints for Ronald (100% connected corridor & doorway graph)
   const waypoints = [
-    { x: 240, y: 220 }, // Sector 1 Biolab
-    { x: 420, y: 500 }, // Sector 1 Doorway
-    { x: 620, y: 650 }, // Central Corridor North
-    { x: 1050, y: 650 }, // Central Hub
-    { x: 1520, y: 240 }, // Sector 4 Airlock Hall
-    { x: 1520, y: 720 }, // Cryo Vault
-    { x: 1510, y: 1100 }, // Sector Gamma (through the new doorway!)
-    { x: 1050, y: 1100 }, // South Hallway
-    { x: 420, y: 960 }, // Sector 2 Server Core Doorway
-    { x: 240, y: 1150 }, // Sector 2 Server Core
-    { x: 620, y: 650 }, // Back to Central Hub
+    { x: 1080, y: 660 }, // 0: East Central Hub (Spawn)
+    { x: 1080, y: 220 }, // 1: North-East Corridor
+    { x: 600, y: 220 },  // 2: North-West Corridor
+    { x: 600, y: 505 },  // 3: Outside Sector 1 Door
+    { x: 410, y: 505 },  // 4: Sector 1 Doorway Threshold
+    { x: 240, y: 240 },  // 5: Inside Sector 1 Biolab
+    { x: 410, y: 505 },  // 6: Exit Sector 1 Doorway
+    { x: 600, y: 660 },  // 7: West Central Corridor
+    { x: 600, y: 1120 }, // 8: South-West Corridor
+    { x: 240, y: 1150 }, // 9: Sector 2 Server Core
+    { x: 600, y: 1120 }, // 10: Exit Sector 2
+    { x: 1080, y: 1120 },// 11: South-East Corridor
+    { x: 1510, y: 1120 },// 12: Sector Gamma South
+    { x: 1510, y: 750 }, // 13: Cryo Vault (through doorway x:1440..1580, y:960)
+    { x: 1550, y: 462 }, // 14: East Wing Hall (through doorway x:1480..1620, y:520)
+    { x: 1550, y: 220 }, // 15: Sector 4 Airlock (through doorway x:1480..1620, y:405)
+    { x: 1550, y: 462 }, // 16: Exit Sector 4
+    { x: 1080, y: 462 }, // 17: Back to East Corridor (through doorway x:1200, y:405..520)
   ];
 
   // Items initialized based on game mode
@@ -426,13 +433,13 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     return false;
   };
 
-  // Obstacle-avoiding navigation for Ronald (Context Steering)
+  // Obstacle-avoiding navigation for Ronald (Context Steering + Anti-Pinning)
   const moveWithAvoidance = (
     entity: { x: number; y: number; angle: number },
     targetX: number,
     targetY: number,
     speed: number,
-    radius = 20
+    radius = 12
   ) => {
     const desiredAngle = Math.atan2(targetY - entity.y, targetX - entity.x);
 
@@ -445,6 +452,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       1.4, -1.4,
       1.75, -1.75,
       2.1, -2.1,
+      2.5, -2.5,
       Math.PI,
     ];
 
@@ -465,16 +473,22 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     const nextXOnly = entity.x + Math.cos(desiredAngle) * speed;
     if (!checkWallCollision(nextXOnly, entity.y, radius)) {
       entity.x = nextXOnly;
+      entity.angle = desiredAngle;
       return true;
     }
 
     const nextYOnly = entity.y + Math.sin(desiredAngle) * speed;
     if (!checkWallCollision(entity.x, nextYOnly, radius)) {
       entity.y = nextYOnly;
+      entity.angle = desiredAngle;
       return true;
     }
 
-    return false;
+    // Emergency unstick if ever overlapping a wall corner
+    entity.x += Math.cos(desiredAngle) * speed;
+    entity.y += Math.sin(desiredAngle) * speed;
+    entity.angle = desiredAngle;
+    return true;
   };
 
   // Interaction logic (Pickups, Lockers, Terminals, Exit)
@@ -781,22 +795,41 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
             targetX = p.x;
             targetY = p.y;
           } else {
-            // Rush to the last seen position!
-            targetX = m.lastSeenX;
-            targetY = m.lastSeenY;
+            // Find the doorway/corridor waypoint visible to Ronald that gets him closest to the player
+            let bestWp = { x: m.lastSeenX, y: m.lastSeenY };
+            let bestDist = Infinity;
+            for (const wp of waypoints) {
+              const dToMonster = Math.hypot(wp.x - m.x, wp.y - m.y);
+              if (dToMonster > 35 && hasLineOfSight(m.x, m.y, wp.x, wp.y, walls)) {
+                const dToPlayer = Math.hypot(wp.x - p.x, wp.y - p.y);
+                if (dToPlayer < bestDist) {
+                  bestDist = dToPlayer;
+                  bestWp = wp;
+                }
+              }
+            }
+            targetX = bestWp.x;
+            targetY = bestWp.y;
           }
         } else {
           const wp = waypoints[m.waypointIdx];
           targetX = wp.x;
           targetY = wp.y;
-          if (Math.hypot(m.x - wp.x, m.y - wp.y) < 40) {
+          if (Math.hypot(m.x - wp.x, m.y - wp.y) < 35) {
             m.waypointIdx = (m.waypointIdx + 1) % waypoints.length;
           }
         }
 
         const mSpeed = m.state === "CHASE" ? m.speed * 1.35 : m.speed;
-        moveWithAvoidance(m, targetX, targetY, mSpeed, 20);
+        moveWithAvoidance(m, targetX, targetY, mSpeed, 12);
         m.animFrame += m.state === "CHASE" ? 0.28 : 0.12;
+        if (typeof window !== "undefined") {
+          (window as unknown as { __RONALD_POS?: { x: number; y: number; state: string } }).__RONALD_POS = {
+            x: Math.round(m.x),
+            y: Math.round(m.y),
+            state: m.state,
+          };
+        }
 
         // Check Jumpscare Collision!
         if (!p.inLocker && distToPlayer < 42) {
@@ -1269,16 +1302,19 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
       }
     }
 
-    // Draw Ronald Monster on Radar (only if within hearing range)
-    const distToPlayer = Math.hypot(p.x - m.x, p.y - m.y);
-    if (distToPlayer < 500 || m.state === "CHASE") {
-      const mx = radarX + m.x * scaleX;
-      const my = radarY + m.y * scaleY;
-      ctx.fillStyle = m.state === "CHASE" ? "#FF1E42" : "#A855F7";
-      ctx.beginPath();
-      ctx.arc(mx, my, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // Always Draw Ronald Monster on Radar so player sees his patrol & chase movement
+    const mx = radarX + m.x * scaleX;
+    const my = radarY + m.y * scaleY;
+    ctx.fillStyle = m.state === "CHASE" ? "#FF1E42" : "#A855F7";
+    ctx.beginPath();
+    ctx.arc(mx, my, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    // Pulse ring around Ronald on radar
+    ctx.strokeStyle = m.state === "CHASE" ? "rgba(255,30,66,0.7)" : "rgba(168,85,247,0.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(mx, my, 5 + Math.sin(Date.now() / 150) * 2, 0, Math.PI * 2);
+    ctx.stroke();
 
     // Draw Player dot & direction on radar
     const px = radarX + p.x * scaleX;
