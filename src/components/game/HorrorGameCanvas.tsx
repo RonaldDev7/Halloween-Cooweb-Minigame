@@ -147,6 +147,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
   const [exitUnlocked, setExitUnlocked] = useState(false);
   const [threatNear, setThreatNear] = useState(false);
   const threatNearRef = useRef(false);
+  const isGameEndedRef = useRef(false);
   const [radioMsg, setRadioMsg] = useState<{ text: string; sender: string; time: number } | null>({
     text:
       mode === "ESCAPE"
@@ -651,6 +652,7 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
     let heartbeatTimer = 0;
 
     const gameLoop = () => {
+      if (isGameEndedRef.current) return;
       const p = playerRef.current;
       const m = monsterRef.current;
 
@@ -863,8 +865,9 @@ export function HorrorGameCanvas({ mode }: HorrorGameCanvasProps) {
           };
         }
 
-        // Check Jumpscare Collision!
+        // Check Jumpscare Collision! (Fires ONCE and ends game loop immediately)
         if (!p.inLocker && distToPlayer < 42) {
+          isGameEndedRef.current = true;
           soundFX.stopChaseMusic();
           triggerJumpscare(() => {
             finishGame("DEFEAT", score, survivalSecs);

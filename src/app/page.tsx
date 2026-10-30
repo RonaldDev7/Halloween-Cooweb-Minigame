@@ -15,6 +15,7 @@ export default function Home() {
   const {
     screen,
     outcome,
+    gameSessionId,
     finalScore,
     finalSurvivalTime,
     isJumpscareActive,
@@ -22,8 +23,8 @@ export default function Home() {
     startContainment,
   } = useGame();
 
-  const isPlaying = screen === "PLAY_ESCAPE" || screen === "PLAY_CONTAINMENT";
   const isGameOver = outcome === "VICTORY" || outcome === "DEFEAT";
+  const showActiveCanvas = !isJumpscareActive && !isGameOver;
 
   return (
     <main className="relative min-h-screen w-full bg-[#09080A] text-[#F5F3F2] overflow-hidden">
@@ -34,9 +35,13 @@ export default function Home() {
       {/* Main Menu State */}
       {screen === "MENU" && <MainMenu />}
 
-      {/* Active 2.5D Survival Gameplay */}
-      {screen === "PLAY_ESCAPE" && <HorrorGameCanvas mode="ESCAPE" />}
-      {screen === "PLAY_CONTAINMENT" && <HorrorGameCanvas mode="CONTAINMENT" />}
+      {/* Active 2.5D Survival Gameplay (unmounts cleanly on jumpscare/gameover) */}
+      {showActiveCanvas && screen === "PLAY_ESCAPE" && (
+        <HorrorGameCanvas key={gameSessionId} mode="ESCAPE" />
+      )}
+      {showActiveCanvas && screen === "PLAY_CONTAINMENT" && (
+        <HorrorGameCanvas key={gameSessionId} mode="CONTAINMENT" />
+      )}
 
       {/* Leaderboard Modal */}
       {screen === "LEADERBOARD" && (
@@ -54,11 +59,11 @@ export default function Home() {
         </>
       )}
 
-      {/* Terrifying Ronald Jumpscare Burst */}
+      {/* Terrifying Ronald Jumpscare Burst (Plays once per defeat) */}
       {isJumpscareActive && <JumpscareOverlay />}
 
       {/* Game Over / Victory Modal */}
-      {isGameOver && (
+      {isGameOver && !isJumpscareActive && (
         <GameOverScreen
           mode={screen === "PLAY_ESCAPE" ? "ESCAPE" : "CONTAINMENT"}
           outcome={outcome}

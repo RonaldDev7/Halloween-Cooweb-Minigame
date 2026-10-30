@@ -34,13 +34,15 @@ export function GameOverScreen({
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   };
 
+  const effectiveScore = score > 0 ? score : survivalTime * 15;
+
   const handleSaveScore = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!playerName.trim() || isSaved) return;
 
     setIsSaving(true);
     soundFX.playClick();
-    const res = await submitScore(playerName, score, survivalTime);
+    await submitScore(playerName, effectiveScore, survivalTime);
     setIsSaving(false);
     setIsSaved(true);
     soundFX.playItemPickup();
@@ -92,55 +94,51 @@ export function GameOverScreen({
           </div>
 
           <div>
-            <span className="text-[10px] text-neutral-500 block">
-              {mode === "ESCAPE" ? "FRAGMENTOS RECUPERADOS:" : "PUNTUACIÓN FINAL:"}
-            </span>
+            <span className="text-[10px] text-neutral-500 block">PUNTUACIÓN FINAL:</span>
             <span className="text-lg font-black text-[#00FFC2] font-mono">
-              {mode === "ESCAPE" ? `${fragmentsFound} / 3` : `${score.toLocaleString()} PTS`}
+              {effectiveScore.toLocaleString()} PTS
             </span>
           </div>
         </div>
 
-        {/* Competitive Mode: Save Nickname to Supabase */}
-        {mode === "CONTAINMENT" && (
-          <div className="p-4 bg-[#181222] border border-[#8B1FD4]/60 rounded space-y-3">
-            <div className="flex items-center justify-center gap-2 text-xs font-bold text-[#F5F3F2]">
-              <Trophy className="w-4 h-4 text-[#F59E0B]" />
-              <span>REGISTRAR EN EL RANKING DE COOWEB:</span>
-            </div>
-
-            {!isSaved ? (
-              <form onSubmit={handleSaveScore} className="space-y-3">
-                <div className="relative">
-                  <User className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={playerName}
-                    onChange={(e) => setPlayerName(e.target.value)}
-                    placeholder="Introduce tu apodo o nombre..."
-                    maxLength={24}
-                    required
-                    className="w-full pl-9 pr-3 py-2 bg-black/70 border border-neutral-700 rounded text-xs text-[#F5F3F2] placeholder:text-neutral-500 focus:outline-none focus:border-[#8B1FD4]"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSaving || !playerName.trim()}
-                  className="w-full py-2.5 bg-[#530570] hover:bg-[#8B1FD4] disabled:bg-neutral-800 text-white font-bold text-xs rounded transition-colors flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(139,31,212,0.4)]"
-                >
-                  <Trophy className="w-3.5 h-3.5 text-[#F59E0B]" />
-                  <span>{isSaving ? "GUARDANDO EN SUPABASE..." : "GUARDAR PUNTUACIÓN"}</span>
-                </button>
-              </form>
-            ) : (
-              <div className="p-3 bg-[#00FFC2]/10 border border-[#00FFC2]/50 rounded flex items-center justify-center gap-2 text-xs text-[#00FFC2] font-bold">
-                <CheckCircle2 className="w-4 h-4 text-[#00FFC2]" />
-                <span>¡PUNTUACIÓN GUARDADA CON ÉXITO!</span>
-              </div>
-            )}
+        {/* Save Nickname to Real Supabase Leaderboard */}
+        <div className="p-4 bg-[#181222] border border-[#8B1FD4]/60 rounded space-y-3">
+          <div className="flex items-center justify-center gap-2 text-xs font-bold text-[#F5F3F2]">
+            <Trophy className="w-4 h-4 text-[#F59E0B]" />
+            <span>REGISTRAR EN EL RANKING DE COOWEB:</span>
           </div>
-        )}
+
+          {!isSaved ? (
+            <form onSubmit={handleSaveScore} className="space-y-3">
+              <div className="relative">
+                <User className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                  placeholder="Introduce tu apodo o nombre..."
+                  maxLength={24}
+                  required
+                  className="w-full pl-9 pr-3 py-2 bg-black/70 border border-neutral-700 rounded text-xs text-[#F5F3F2] placeholder:text-neutral-500 focus:outline-none focus:border-[#8B1FD4]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSaving || !playerName.trim()}
+                className="w-full py-2.5 bg-[#530570] hover:bg-[#8B1FD4] disabled:bg-neutral-800 text-white font-bold text-xs rounded transition-colors flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(139,31,212,0.4)] cursor-pointer"
+              >
+                <Trophy className="w-3.5 h-3.5 text-[#F59E0B]" />
+                <span>{isSaving ? "GUARDANDO EN LEADERBOARD..." : "GUARDAR EN LEADERBOARD"}</span>
+              </button>
+            </form>
+          ) : (
+            <div className="p-3 bg-[#00FFC2]/10 border border-[#00FFC2]/50 rounded flex items-center justify-center gap-2 text-xs text-[#00FFC2] font-bold">
+              <CheckCircle2 className="w-4 h-4 text-[#00FFC2]" />
+              <span>¡PUNTUACIÓN GUARDADA EN EL RANKING!</span>
+            </div>
+          )}
+        </div>
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
@@ -149,21 +147,19 @@ export function GameOverScreen({
               soundFX.playClick();
               onRestart();
             }}
-            className="chamfer-btn px-6 py-2.5 bg-[#530570] hover:bg-[#8B1FD4] text-white font-bold text-xs rounded transition-colors flex items-center gap-2 shadow-[0_0_20px_rgba(139,31,212,0.4)]"
+            className="chamfer-btn px-6 py-2.5 bg-[#530570] hover:bg-[#8B1FD4] text-white font-bold text-xs rounded transition-colors flex items-center gap-2 shadow-[0_0_20px_rgba(139,31,212,0.4)] cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5 text-[#00FFC2]" />
             <span>JUGAR OTRA VEZ</span>
           </button>
 
-          {mode === "CONTAINMENT" && (
-            <button
-              onClick={openLeaderboard}
-              className="px-5 py-2.5 bg-black/60 hover:bg-[#1A1424] border border-[#8B1FD4]/70 text-neutral-300 hover:text-white font-bold text-xs rounded transition-colors flex items-center gap-2"
-            >
-              <Trophy className="w-3.5 h-3.5 text-[#F59E0B]" />
-              <span>VER RANKING</span>
-            </button>
-          )}
+          <button
+            onClick={openLeaderboard}
+            className="px-5 py-2.5 bg-black/60 hover:bg-[#1A1424] border border-[#8B1FD4]/70 text-neutral-300 hover:text-white font-bold text-xs rounded transition-colors flex items-center gap-2 cursor-pointer"
+          >
+            <Trophy className="w-3.5 h-3.5 text-[#F59E0B]" />
+            <span>VER RANKING</span>
+          </button>
 
           <button
             onClick={goToMenu}
